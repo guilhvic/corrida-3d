@@ -63,6 +63,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 export function createCar(x = 0, z = 0, yaw = 0) {
   return {
     x, z, yaw, vx: 0, vz: 0, r: 0,
+    y: 0, pitch: 0, gx: 0, gz: 0, // altura, inclinação e gravidade da rampa (track.followGround)
     // Telemetria do último passo (painel de debug): forças em N, ângulos em rad, torques em N·m.
     tel: {
       Fzf: 0, Fzr: 0, FxF: 0, FxR: 0, FyF: 0, FyR: 0, gripF: 0, gripR: 0, alphaF: 0, alphaR: 0,
@@ -299,6 +300,10 @@ export function stepCar(c, input, dt, surfF, surfR) {
   t.drive = driveForce; t.torque = ratio !== 0 ? throttle * engineTorque(c.rpm, P) : 0;
   t.drag = drag; t.down = down; t.Mz = Mz; t.assistMz = Mz - tireMz; t.hold = hold;
   t.maxSteer = maxSteer; t.steerTarget = steerTarget;
+
+  // Rampa: componente da gravidade ao longo da pista (gx, gz em m/s², zero nas pistas planas)
+  c.vx += (c.gx || 0) * dt;
+  c.vz += (c.gz || 0) * dt;
 
   const holdX = speed > 1 ? (hold * c.vx) / speed : 0, holdZ = speed > 1 ? (hold * c.vz) / speed : 0;
   c.vx += ((Fx * sy + Fy * cy) + holdX) / m * dt;

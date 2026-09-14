@@ -1,6 +1,6 @@
 // Testes headless: física de drift, paredes, pontuação, voltas e pilotagem de teclado.
 import { CAR, createCar, stepCar } from '../src/physics.js';
-import { buildTrack, FUJIMI_POINTS, nearestIndex, carSurfaces, lateralOffset, SURFACES, ROAD_HALF_WIDTH, WALL_OFFSET } from '../src/track.js';
+import { buildTrack, FUJIMI_POINTS, HAKONE_POINTS, nearestIndex, carSurfaces, lateralOffset, followGround, SURFACES, ROAD_HALF_WIDTH, WALL_OFFSET } from '../src/track.js';
 import { botInput } from '../src/bot.js';
 import { collideWalls, CAR_HALF_LENGTH } from '../src/walls.js';
 import { DriftScorer, DRIFT } from '../src/drift.js';
@@ -251,12 +251,13 @@ function aiRace(count, laps, track = cityTrack) {
   });
   const cars = racers.map((r) => r.car);
   for (const r of racers) r.timer.startAt(r.idx); // grid já depois da linha
-  for (let t = 0; t < 70 * laps && racers.some((r) => !r.done); t += DT) {
+  for (let t = 0; t < Math.max(70, track.length / 14) * laps && racers.some((r) => !r.done); t += DT) {
     for (const r of racers) {
       const inp = r.driver.update(r.idx, DT, cars);
       const [sf, sr] = carSurfaces(track, r.car, r.idx, CAR.a, CAR.b);
       stepCar(r.car, inp, DT, sf, sr);
       r.idx = nearestIndex(track, r.car.x, r.car.z, r.idx);
+      followGround(r.car, track, r.idx);
       const hit = collideWalls(r.car, track, r.idx);
       r.impact = hit ? hit.speed : 0;
       if (hit && hit.speed > 1.2) r.walls++;
@@ -332,6 +333,61 @@ function aiRace(count, laps, track = cityTrack) {
   const other = loadRanking('wangan', 'kaze180').length + loadRanking('fujimi', 'seiran').length;
   check(list.length === 10 && sorted && other === 0 && Math.abs(ghost[0] - 1.2) < 1e-9 && Math.abs(ghost[2] - 0.79) < 1e-9 && pickGhost(list, 'none') === null,
     `ranking: ${list.length} voltas ordenadas, posições ao entrar ${positions.join(',')}, fantasma ${ghost.slice(0, 3).join(' ')}`);
+  delete globalThis.localStorage;
+}
+
+// 13) Serra de Hakone: grampos, rampas dentro do limite, gravidade na descida e IA completando as voltas
+{
+  const hakone = buildTrack(HAKONE_POINTS);
+  let tightest = 0, steepest = 0;
+  for (let j = 0; j < hakone.N; j++) { tightest = Math.max(tightest, Math.abs(hakone.curv[j])); steepest = Math.max(steepest, Math.abs(hakone.grade[j])); }
+  const drop = Math.max(...hakone.y) - Math.min(...hakone.y);
+  check(hakone.length > 1400 && 1 / tightest > 15 && steepest < 0.13 && drop > 30,
+    `Hakone: ${hakone.length.toFixed(0)} m, grampo de raio ${(1 / tightest).toFixed(0)} m, rampa máxima ${(steepest * 100).toFixed(1)}%, desnível ${drop.toFixed(0)} m`);
+  // Na banguela a descida acelera e a subida freia (mesmo trecho reto, sentidos opostos)
+  let j = 0, best = 0;
+  for (let k = 0; k < hakone.N; k++) if (Math.abs(hakone.curv[k]) < 0.004 && -hakone.grade[k] > best) { best = -hakone.grade[k]; j = k; }
+  const coast = (dir) => {
+    const yaw = Math.atan2(hakone.tx[j], hakone.tz[j]) + (dir < 0 ? Math.PI : 0);
+    const c = createCar(hakone.x[j], hakone.z[j], yaw);
+    c.vx = Math.sin(yaw) * 12; c.vz = Math.cos(yaw) * 12; c.gear = 3;
+    let idx = j;
+    for (let t = 0; t < 1.5; t += DT) { followGround(c, hakone, idx); stepCar(c, { throttle: 0, brake: 0, steer: 0, handbrake: 0 }, DT, asphalt, asphalt); idx = nearestIndex(hakone, c.x, c.z, idx); }
+    return c.speed;
+  };
+  const down = coast(1), up = coast(-1);
+  check(down > up + 1, `Hakone: na banguela a ${(best * 100).toFixed(1)}% chega a ${(down * 3.6).toFixed(0)} km/h descendo e ${(up * 3.6).toFixed(0)} km/h subindo`);
+  const [solo] = aiRace(1, 2, hakone);
+  check(solo.done && solo.walls <= 3, `Hakone: IA sozinha fez 2 voltas com ${solo.walls} batida(s) na parede`);
+  const pack = aiRace(8, 1, hakone);
+  const walls = pack.reduce((sum, r) => sum + r.walls, 0);
+  check(pack.every((r) => r.done) && walls <= 12, `Hakone: grupo de 8 completou a volta (${walls} batidas na parede)`);
+}
+
+// 14) Perfil e medalhas: estatísticas somam, medalhas liberam uma vez e itens bloqueados não entram na garagem
+{
+  const mem = new Map();
+  globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
+  const { ProfileTracker, loadProfile } = await import('../src/profile.js');
+  const { loadGarage, saveGarage, isLocked, PAINTS } = await import('../src/garage.js');
+  const tracker = new ProfileTracker();
+  tracker.startRace({ track: 'wangan', time: 'chuva', car: 'kaze180', laps: 3, racers: 4, difficulty: 'normal' });
+  for (let t = 0; t < 250; t += 0.05) tracker.drive(0.05, { speed: 22, angle: 48, combo: true, drifting: true }); // 5,5 km de lado
+  tracker.bank(5200);
+  tracker.grade('SS');
+  for (let l = 0; l < 3; l++) tracker.lap(3000);
+  tracker.finish({ position: 1, racers: 4, total: 9000 });
+  const got = tracker.checkAchievements().map((a) => a.id);
+  const again = tracker.checkAchievements().length;
+  const saved = loadProfile();
+  const want = ['estrada-1', 'combo-1', 'angulo-1', 'drift-3', 'ss-1', 'vitoria-1', 'limpa', 'chuva'];
+  check(want.every((id) => got.includes(id)) && !got.includes('estrada-2') && again === 0 && saved.wins === 1 && Math.abs(saved.km - 5.5) < 0.01 && Math.round(saved.maxAngle) === 48,
+    `perfil: ${saved.km.toFixed(1)} km, ${saved.wins} vitória, ângulo ${Math.round(saved.maxAngle)}°, medalhas ${got.join(', ')}`);
+  saveGarage('seiran', { paint: 'dourado', trail: 'fogo' });
+  const locked = loadGarage('seiran', saved.unlocked), unlockedGarage = loadGarage('seiran', { 'ss-3': 1, 'combo-3': 1 });
+  const grafite = PAINTS.find((p) => p.id === 'grafite');
+  check(locked.paint === 'original' && locked.trail === 'auto' && unlockedGarage.paint === 'dourado' && unlockedGarage.trail === 'fogo' && !isLocked(grafite, saved.unlocked),
+    `garagem: item bloqueado volta ao original (${locked.paint}), liberado aplica (${unlockedGarage.paint}, ${unlockedGarage.trail})`);
   delete globalThis.localStorage;
 }
 

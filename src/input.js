@@ -12,6 +12,8 @@ const PAD_ACTIONS = {
 // Navegação nos menus (D-pad; o analógico esquerdo também navega).
 const PAD_NAV = { up: PAD.UP, down: PAD.DOWN, left: PAD.LEFT, right: PAD.RIGHT };
 const DEADZONE = 0.1;
+const NAV_DELAY = 420;  // ms segurando o direcional (analógico ou D-pad) até começar a repetir
+const NAV_REPEAT = 120; // ms entre repetições
 
 const approach = (v, target, rate) => (v < target ? Math.min(target, v + rate) : Math.max(target, v - rate));
 
@@ -23,6 +25,7 @@ export class Input {
     this.padPrev = [];
     this.padIndex = null;
     this.stickNav = { x: 0, y: 0 };
+    this.navHeld = {}; // direção -> { since, last } para repetir segurando
     this.usingPad = false;
     this.rumbleUntil = 0;
     this.rumbleEnabled = true;
@@ -120,15 +123,27 @@ export class Input {
         const now = !!pad.buttons[i]?.pressed;
         if (now && !this.padPrev[i]) { actions[name] = true; this.usingPad = true; }
       }
-      for (const [name, i] of Object.entries(PAD_NAV)) {
-        if (pad.buttons[i]?.pressed && !this.padPrev[i]) actions[name] = true;
-      }
-      // Analógico como direcional: dispara ao passar de 0,6 e rearma abaixo de 0,3.
+      // Direções dos menus pelo D-pad e pelo analógico esquerdo (dispara ao passar de 0,5 e rearma abaixo de 0,3).
+      // Segurando, repete depois de NAV_DELAY.
+      const held = { up: false, down: false, left: false, right: false };
+      for (const [name, i] of Object.entries(PAD_NAV)) if (pad.buttons[i]?.pressed) held[name] = true;
       for (const [axis, neg, pos, idx] of [['x', 'left', 'right', 0], ['y', 'up', 'down', 1]]) {
         const v = pad.axes[idx] || 0;
-        const dir = v > 0.6 ? 1 : v < -0.6 ? -1 : Math.abs(v) < 0.3 ? 0 : this.stickNav[axis];
-        if (dir !== 0 && dir !== this.stickNav[axis]) actions[dir > 0 ? pos : neg] = true;
+        const dir = v > 0.5 ? 1 : v < -0.5 ? -1 : Math.abs(v) < 0.3 ? 0 : this.stickNav[axis];
         this.stickNav[axis] = dir;
+        if (dir) held[dir > 0 ? pos : neg] = true;
+      }
+      // Na diagonal fica só o eixo mais inclinado (senão o analógico "escorrega" para a linha de baixo)
+      if ((held.left || held.right) && (held.up || held.down) && !pad.buttons[PAD.UP]?.pressed && !pad.buttons[PAD.DOWN]?.pressed) {
+        if (Math.abs(pad.axes[0] || 0) >= Math.abs(pad.axes[1] || 0)) held.up = held.down = false;
+        else if (!pad.buttons[PAD.LEFT]?.pressed && !pad.buttons[PAD.RIGHT]?.pressed) held.left = held.right = false;
+      }
+      const now = performance.now();
+      for (const [name, on] of Object.entries(held)) {
+        const h = this.navHeld[name];
+        if (!on) { delete this.navHeld[name]; continue; }
+        if (!h) { this.navHeld[name] = { since: now, last: now }; actions[name] = true; continue; }
+        if (now - h.since > NAV_DELAY && now - h.last > NAV_REPEAT) { h.last = now; actions[name] = true; }
       }
       this.padPrev = pad.buttons.map((b) => b.pressed);
     }

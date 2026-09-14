@@ -23,6 +23,23 @@ export const FUJIMI_POINTS = [
   [218, -150], [170, -162], [80, -160], [42, -155], [15, -140], [0, -115],
 ];
 
+// Serra estilo Hakone (~1,5 km, [x, z, altura]): largada no alto, curva de encosta, sequência de grampos
+// descendo a encosta em zigue-zague, reta do vale e subida sinuosa de volta. A altura é interpolada ao longo da pista.
+export const HAKONE_POINTS = [
+  [-60, 0, 46], [80, 0, 43.2],
+  [108, -6, 42.1], [124, -30, 40.8], [117, -57, 39.4], [88, -72, 37.9],
+  [14, -72, 34.4],
+  [-8.5, -81, 33.2], [-8.5, -113, 31.7], [14, -122, 30.5],
+  [110, -122, 26],
+  [132.5, -131, 24.9], [132.5, -163, 23.3], [110, -172, 22.1],
+  [14, -172, 17.6],
+  [-8.5, -181, 16.4], [-8.5, -213, 14.9], [14, -222, 13.7],
+  [110, -222, 9.2],
+  [155.2, -233.2, 7], [155.2, -266.8, 5.4], [130, -278, 4],
+  [-50, -278, 9],
+  [-84, -262, 13.2], [-94, -223, 17.8], [-78, -175, 23.2], [-98, -125, 29.1], [-80, -75, 35.1], [-94, -34, 39.9], [-86, -8, 42.9],
+];
+
 function catmullRom(p0, p1, p2, p3, t) {
   // Formulação de Barry-Goldman com alpha = 0.5 (centrípeta: sem laços nem cúspides).
   const knot = (a, b) => Math.sqrt(Math.hypot(b[0] - a[0], b[1] - a[1])) || 1e-4;
@@ -91,7 +108,50 @@ export function buildTrack(points = TRACK_POINTS, spacing = 2) {
     curv[j] = sum / (2 * R + 1);
   }
 
-  return { N, length, ds, x, z, tx, tz, nx, nz, curv };
+  const track = { N, length, ds, x, z, tx, tz, nx, nz, curv };
+  if (points.some((p) => p.length > 2)) addElevation(track, points);
+  return track;
+}
+
+// Altura por amostra (track.y) e rampa (track.grade, dy/ds no sentido da corrida): as alturas dos pontos de controle
+// são ligadas em linha reta ao longo da pista e suavizadas (janela de ~24 m) para a rampa não mudar de golpe.
+function addElevation(track, points) {
+  const { N, ds } = track;
+  const keys = points.map((p) => ({ j: nearestIndex(track, p[0], p[1]), y: p[2] ?? 0 })).sort((a, b) => a.j - b.j);
+  const raw = new Float32Array(N);
+  for (let k = 0; k < keys.length; k++) {
+    const a = keys[k], b = keys[(k + 1) % keys.length];
+    const span = (b.j - a.j + N) % N || N;
+    for (let i = 0; i < span; i++) raw[(a.j + i) % N] = a.y + (b.y - a.y) * (i / span);
+  }
+  const y = new Float32Array(N), grade = new Float32Array(N);
+  const R = 6;
+  for (let j = 0; j < N; j++) {
+    let sum = 0;
+    for (let k = -R; k <= R; k++) sum += raw[(j + k + N) % N];
+    y[j] = sum / (2 * R + 1);
+  }
+  for (let j = 0; j < N; j++) grade[j] = (y[(j + 1) % N] - y[(j - 1 + N) % N]) / (2 * ds);
+  track.y = y;
+  track.grade = grade;
+}
+
+// Altura do chão da pista no ponto (px, pz), perto da amostra idx. Pistas planas: 0.
+export function groundAt(track, idx, px, pz) {
+  if (!track.y) return 0;
+  const along = (px - track.x[idx]) * track.tx[idx] + (pz - track.z[idx]) * track.tz[idx];
+  return track.y[idx] + along * track.grade[idx];
+}
+
+// Altura, inclinação do bico (pitch, + = subindo) e aceleração da gravidade na rampa (gx, gz) do carro.
+export function followGround(c, track, idx) {
+  if (!track.y) { c.y = 0; c.pitch = 0; c.gx = 0; c.gz = 0; return; }
+  const g = track.grade[idx], tx = track.tx[idx], tz = track.tz[idx];
+  c.y = groundAt(track, idx, c.x, c.z);
+  c.pitch = Math.atan(g * (Math.sin(c.yaw) * tx + Math.cos(c.yaw) * tz));
+  const a = (-9.81 * g) / Math.sqrt(1 + g * g);
+  c.gx = a * tx;
+  c.gz = a * tz;
 }
 
 // Índice da amostra mais próxima. Com `hint` busca só na vizinhança (O(1) por frame).

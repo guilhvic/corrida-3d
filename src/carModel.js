@@ -37,7 +37,7 @@ function spoke(side, width, depth, taper, dish) {
 
 // Face do aro numa geometria só; side = +1 roda esquerda, -1 direita.
 // six: 6 raios de competição · five: 5 raios largos · mesh: 10 raios finos de aro "daisy"
-// eight: 8 raios finos e côncavos · disc: disco fechado com furos de ventilação
+// eight: 8 raios finos e côncavos · disc: disco fechado com furos de ventilação · twin: 5 pares de raios finos
 function rimFaceGeometry(style, side) {
   const parts = [];
   if (style === 'disc') {
@@ -53,7 +53,14 @@ function rimFaceGeometry(style, side) {
       parts.push(hole);
     }
   }
-  const count = style === 'five' ? 5 : style === 'mesh' ? 10 : style === 'eight' ? 8 : style === 'disc' ? 0 : 6;
+  if (style === 'twin') {
+    for (let i = 0; i < 10; i++) {
+      const g = spoke(side, 0.014, 0.03, 0.7, 0.02);
+      g.rotateX((Math.floor(i / 2) * Math.PI * 2) / 5 + (i % 2 ? 0.16 : -0.16));
+      parts.push(g);
+    }
+  }
+  const count = style === 'five' ? 5 : style === 'mesh' ? 10 : style === 'eight' ? 8 : style === 'disc' || style === 'twin' ? 0 : 6;
   for (let i = 0; i < count; i++) {
     const g = style === 'five' ? spoke(side, 0.022, 0.075, 0.7, 0.012)
       : style === 'mesh' ? spoke(side, 0.016, 0.028, 0.8, 0.006)
@@ -184,6 +191,7 @@ function stickerTexture(sticker) {
 export function createCarModel({ design: designId = 'kaze180', color, ghost = false, envMap = null, headlight: withHeadlight = true, look = null } = {}) {
   const design = DESIGNS[designId] || DESIGNS.kaze180;
   const root = new THREE.Group();
+  root.rotation.order = 'YXZ'; // rumo e depois a inclinação da rampa
   const body = new THREE.Group(); // recebe rolagem/arfagem
   root.add(body);
 
@@ -558,8 +566,9 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     tailLights: parts.tailFlares, // [x, y, z] das lanternas (rastro de drift)
     paintMaterials: envMaterials,
     update(car) {
-      root.position.set(car.x, 0.03, car.z);
+      root.position.set(car.x, (car.y || 0) + 0.03, car.z);
       root.rotation.y = car.yaw;
+      root.rotation.x = -(car.pitch || 0);
       body.rotation.z = THREE.MathUtils.clamp(car.ay * 0.006, -0.06, 0.06);
       body.rotation.x = THREE.MathUtils.clamp(-car.ax * 0.004, -0.04, 0.04);
       for (const w of wheels) {
@@ -581,9 +590,10 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     setDetail(near) {
       interior.visible = near;
     },
-    setPose(x, z, yaw) {
-      root.position.set(x, 0.03, z);
+    setPose(x, z, yaw, y = 0, pitch = 0) {
+      root.position.set(x, y + 0.03, z);
       root.rotation.y = yaw;
+      root.rotation.x = -pitch;
     },
     setEnvMap(texture) {
       envMap = texture;

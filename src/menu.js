@@ -1,15 +1,19 @@
-// Menus: tela inicial (modos), singleplayer (pista, carro, voltas, grid, dificuldade), controles, pausa e resultado.
+// Menus: tela inicial (modos), singleplayer (pista, carro, voltas, grid, dificuldade), garagem, ranking, perfil do piloto,
+// configurações, controles, pausa e resultado.
 // Navega com mouse, teclado (setas/WASD, Enter, Esc) ou controle (D-pad/analógico, A, B).
 import { TRACKS, CARS, LAP_OPTIONS, carSpecs, trackById, timeOf } from './catalog.js';
 import { MAX_RACERS } from './race.js';
 import { DIFFICULTIES, DIFFICULTY_ORDER } from './difficulty.js';
 import { ENGINE_PROFILES } from './engine-dsp.js';
-import { GARAGE_OPTIONS, DEFAULT_GARAGE, loadGarage, saveGarage } from './garage.js';
+import { GARAGE_OPTIONS, DEFAULT_GARAGE, loadGarage, saveGarage, isLocked } from './garage.js';
+import { loadProfile } from './profile.js';
+import { ACHIEVEMENTS, MEDALS, achievementById, rewardOf, progressOf, driverTitle } from './achievements.js';
 import { loadRanking, pickGhost } from './ranking.js';
 import { CONFIG_GROUPS, DEFAULT_CONFIG, loadConfig, saveConfig } from './settings.js';
 import { formatTime, formatPoints } from './laps.js';
 
 const SETTINGS_KEY = 'corrida3d.corrida';
+export const RANDOM = 'random'; // pista ou horário sorteado a cada largada
 const RECORDS_KEY = 'corrida3d.recordes';
 
 const lapLabel = (n) => (n === 0 ? 'TREINO LIVRE' : `${n} VOLTA${n > 1 ? 'S' : ''}`);
@@ -39,7 +43,7 @@ export class Menu {
 
     const saved = savedSettings();
     this.settings = {
-      track: TRACKS.some((t) => t.id === saved.track) ? saved.track : TRACKS[0].id,
+      track: saved.track === RANDOM || TRACKS.some((t) => t.id === saved.track) ? saved.track : TRACKS[0].id,
       time: saved.time,
       car: CARS.some((c) => c.id === saved.car) ? saved.car : CARS[0].id,
       laps: LAP_OPTIONS.includes(saved.laps) ? saved.laps : 3,
@@ -47,26 +51,45 @@ export class Menu {
       ghost: typeof saved.ghost === 'string' ? saved.ghost : 'best', // 'best', 'none' ou id de uma volta do ranking
     };
 
-    this.settings.time = timeOf(trackById(this.settings.track), this.settings.time).id;
+    // Horário aleatório vale com qualquer pista; pista aleatória sempre sorteia o horário também
+    if (this.settings.track === RANDOM || saved.time === RANDOM) this.settings.time = RANDOM;
+    else this.settings.time = timeOf(trackById(this.settings.track), this.settings.time).id;
+    this.rankTrack = this.settings.track === RANDOM ? TRACKS[0].id : this.settings.track; // pista mostrada no ranking
+    this.active = null; // pista e horário sorteados da corrida em andamento
 
-    // Cada seletor: lista de opções, índice atual e como mostrar.
+    // Cada seletor: lista de opções, índice atual e como mostrar. Pista e horário têm ALEATÓRIA/ALEATÓRIO no fim.
     this.selectors = {
       track: {
-        count: () => TRACKS.length,
-        index: () => TRACKS.findIndex((t) => t.id === this.settings.track),
-        set: (i) => { this.settings.track = TRACKS[i].id; this.settings.time = timeOf(TRACKS[i], this.settings.time).id; },
-        label: (i) => [TRACKS[i].name, TRACKS[i].jp],
+        count: () => TRACKS.length + 1,
+        index: () => (this.settings.track === RANDOM ? TRACKS.length : TRACKS.findIndex((t) => t.id === this.settings.track)),
+        set: (i) => {
+          if (i === TRACKS.length) { this.settings.track = RANDOM; this.settings.time = RANDOM; return; }
+          this.settings.track = TRACKS[i].id;
+          this.rankTrack = TRACKS[i].id;
+          if (this.settings.time !== RANDOM) this.settings.time = timeOf(TRACKS[i], this.settings.time).id;
+        },
+        label: (i) => (i === TRACKS.length ? ['ALEATÓRIA', `sorteada entre as ${TRACKS.length} a cada largada`] : [TRACKS[i].name, TRACKS[i].jp]),
       },
       time: {
-        count: () => trackById(this.settings.track).times.length,
-        index: () => trackById(this.settings.track).times.findIndex((t) => t.id === this.settings.time),
-        set: (i) => { this.settings.time = trackById(this.settings.track).times[i].id; },
-        label: (i) => { const t = trackById(this.settings.track).times[i]; return [t.name, t.jp]; },
+        count: () => (this.settings.track === RANDOM ? 1 : trackById(this.settings.track).times.length + 1),
+        index: () => {
+          if (this.settings.time === RANDOM) return this.selectors.time.count() - 1;
+          return trackById(this.settings.track).times.findIndex((t) => t.id === this.settings.time);
+        },
+        set: (i) => {
+          const times = trackById(this.settings.track).times;
+          this.settings.time = this.settings.track === RANDOM || i === times.length ? RANDOM : times[i].id;
+        },
+        label: (i) => {
+          if (this.settings.track === RANDOM || i === trackById(this.settings.track).times.length) return ['ALEATÓRIO', 'sorteado a cada largada'];
+          const t = trackById(this.settings.track).times[i];
+          return [t.name, t.jp];
+        },
       },
       car: {
         count: () => CARS.length,
         index: () => CARS.findIndex((c) => c.id === this.settings.car),
-        set: (i) => { this.settings.car = CARS[i].id; this.garage = loadGarage(CARS[i].id); },
+        set: (i) => { this.settings.car = CARS[i].id; this.garage = loadGarage(CARS[i].id, this.unlocked); this.garagePeek = {}; },
         label: (i) => [CARS[i].name, CARS[i].jp],
       },
       laps: {
@@ -91,18 +114,38 @@ export class Menu {
       },
     };
 
-    // Ranking: os mesmos seletores de pista e carro, repetidos na tela do ranking
-    this.selectors['r-track'] = this.selectors.track;
+    // Ranking: pista própria (sem aleatória; escolher uma aqui também escolhe para a corrida, se ela não for aleatória) e o mesmo carro
+    this.selectors['r-track'] = {
+      count: () => TRACKS.length,
+      index: () => TRACKS.findIndex((t) => t.id === this.rankTrack),
+      set: (i) => {
+        this.rankTrack = TRACKS[i].id;
+        if (this.settings.track === RANDOM) return;
+        this.settings.track = TRACKS[i].id;
+        if (this.settings.time !== RANDOM) this.settings.time = timeOf(TRACKS[i], this.settings.time).id;
+      },
+      label: (i) => [TRACKS[i].name, TRACKS[i].jp],
+    };
     this.selectors['r-car'] = this.selectors.car;
 
-    // Garagem: um seletor por opção, valendo para o carro escolhido
-    this.garage = loadGarage(this.settings.car);
+    // Garagem: um seletor por opção, valendo para o carro escolhido. Itens bloqueados aparecem (com o cadeado e a
+    // conquista que libera) mas não são aplicados: ficam só "espiados" até escolher outro.
+    this.garage = loadGarage(this.settings.car, this.unlocked);
+    this.garagePeek = {};
     for (const [key, list] of Object.entries(GARAGE_OPTIONS)) {
       this.selectors[`g-${key}`] = {
         count: () => list.length,
-        index: () => Math.max(0, list.findIndex((o) => o.id === this.garage[key])),
-        set: (i) => { this.garage[key] = list[i].id; },
-        label: (i) => [list[i].name, `${i + 1}/${list.length}`],
+        index: () => Math.max(0, list.findIndex((o) => o.id === (this.garagePeek[key] ?? this.garage[key]))),
+        set: (i) => {
+          if (isLocked(list[i], this.unlocked)) this.garagePeek[key] = list[i].id;
+          else { delete this.garagePeek[key]; this.garage[key] = list[i].id; }
+        },
+        label: (i) => {
+          const o = list[i];
+          if (!isLocked(o, this.unlocked)) return [o.name, `${i + 1}/${list.length}`];
+          const a = achievementById(o.unlock);
+          return [`🔒 ${o.name}`, `medalha ${a?.name ?? ''}`];
+        },
       };
     }
 
@@ -156,11 +199,26 @@ export class Menu {
 
   get visible() { return this.current !== null; }
 
-  // Traçado da pista escolhida, só para o desenho da prévia.
-  get previewTrack() {
-    const id = this.settings.track;
+  // Conquistas liberadas (lidas do perfil salvo)
+  get unlocked() { return loadProfile().unlocked; }
+
+  // Traçado de uma pista, só para o desenho da prévia.
+  trackShape(id) {
     if (!this.trackCache.has(id)) this.trackCache.set(id, trackById(id).build());
     return this.trackCache.get(id);
+  }
+
+  get previewTrack() {
+    return this.trackShape(this.settings.track === RANDOM ? TRACKS[0].id : this.settings.track);
+  }
+
+  // Configuração da corrida com pista e horário aleatórios já sorteados
+  resolved() {
+    const s = { ...this.settings };
+    if (s.track === RANDOM) s.track = TRACKS[Math.floor(Math.random() * TRACKS.length)].id;
+    const times = trackById(s.track).times;
+    if (s.time === RANDOM) s.time = times[Math.floor(Math.random() * times.length)].id;
+    return s;
   }
 
   items() {
@@ -178,7 +236,9 @@ export class Menu {
   }
 
   show(name) {
-    if ((name === 'controls' || name === 'config') && this.current && this.current !== 'controls' && this.current !== 'config') this.previous = this.current;
+    // Controles fica dentro das configurações: voltar dele leva às configurações, e delas para onde se estava (menu ou pausa)
+    if (name === 'config' && this.current && this.current !== 'controls' && this.current !== 'config') this.previous = this.current;
+    if (name === 'garage') { this.garage = loadGarage(this.settings.car, this.unlocked); this.garagePeek = {}; }
     this.current = name;
     this.root.hidden = false;
     for (const [key, screen] of Object.entries(this.screens)) screen.hidden = key !== name;
@@ -199,10 +259,18 @@ export class Menu {
     if (!this.visible) return;
     const items = this.items();
     const index = this.focusIndex[this.current] ?? 0;
-    if (a.up) this.setFocus((index - 1 + items.length) % items.length);
-    if (a.down) this.setFocus((index + 1) % items.length);
+    // Cima/baixo: ordem da lista, pulando quem está na mesma linha (botões lado a lado)
+    if (a.up) this.setFocus(this.stepRow(items, index, -1));
+    if (a.down) this.setFocus(this.stepRow(items, index, 1));
     const focused = this.items()[this.focusIndex[this.current] ?? 0];
-    if ((a.left || a.right) && focused?.classList.contains('selector')) this.change(focused.dataset.key, a.right ? 1 : -1);
+    // Esquerda/direita: num seletor troca o valor; fora dele anda para o item ao lado na mesma linha
+    if (a.left || a.right) {
+      if (focused?.classList.contains('selector')) this.change(focused.dataset.key, a.right ? 1 : -1);
+      else {
+        const side = this.neighbor(items, index, a.right ? 1 : -1);
+        if (side !== null) this.setFocus(side);
+      }
+    }
     if (a.confirm && focused) {
       if (focused.classList.contains('selector')) this.change(focused.dataset.key, 1);
       else focused.click();
@@ -210,9 +278,43 @@ export class Menu {
     if (a.back || a.pause) this.back();
   }
 
+  // Mesma linha na tela: caixas que se sobrepõem na vertical
+  static sameRow(a, b) {
+    return b.top < a.bottom - 2 && b.bottom > a.top + 2;
+  }
+
+  // Próximo item da lista (dir = ±1) que não esteja na mesma linha do atual; dá a volta no fim
+  stepRow(items, index, dir) {
+    const n = items.length;
+    if (!n) return index;
+    const a = items[index]?.getBoundingClientRect();
+    for (let k = 1; k < n; k++) {
+      const i = (index + dir * k + n * k) % n;
+      if (!a || !Menu.sameRow(a, items[i].getBoundingClientRect())) return i;
+    }
+    return (index + dir + n) % n;
+  }
+
+  // Item ao lado na mesma linha (dx = ±1), o mais perto; null se não houver
+  neighbor(items, index, dx) {
+    const cur = items[index];
+    if (!cur) return null;
+    const a = cur.getBoundingClientRect();
+    let best = null, bestDist = Infinity;
+    items.forEach((el, i) => {
+      if (i === index) return;
+      const b = el.getBoundingClientRect();
+      if (!Menu.sameRow(a, b) || (dx > 0 ? b.left < a.right - 2 : b.right > a.left + 2)) return;
+      const dist = dx > 0 ? b.left - a.right : a.left - b.right;
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    });
+    return best;
+  }
+
   back() {
-    if (this.current === 'controls' || this.current === 'config') this.show(this.previous);
-    else if (this.current === 'single') this.show('main');
+    if (this.current === 'controls') this.show('config');
+    else if (this.current === 'config') this.show(this.previous);
+    else if (this.current === 'single' || this.current === 'profile') this.show('main');
     else if (this.current === 'garage') this.show('single');
     else if (this.current === 'ranking') this.show('single');
     else if (this.current === 'pause') this.handlers.onResume();
@@ -233,6 +335,7 @@ export class Menu {
       return;
     }
     if (key.startsWith('g-')) {
+      if (this.garagePeek[key.slice(2)]) { this.render(); return; } // bloqueado: só mostra
       saveGarage(this.settings.car, this.garage);
       this.handlers.onGarage?.(this.settings.car, { ...this.garage });
       this.render();
@@ -256,12 +359,17 @@ export class Menu {
 
   action(name) {
     const h = this.handlers;
-    if (name === 'start' || name === 'again') h.onStart({ ...this.settings });
+    if (name === 'start' || name === 'again') {
+      this.active = this.resolved();
+      h.onStart({ ...this.active });
+    }
     if (name === 'single') this.show('single');
     if (name === 'garage') this.show('garage');
     if (name === 'ranking') this.show('ranking');
+    if (name === 'profile') this.show('profile');
     if (name === 'garage-reset') {
       this.garage = { ...DEFAULT_GARAGE };
+      this.garagePeek = {};
       saveGarage(this.settings.car, this.garage);
       this.handlers.onGarage?.(this.settings.car, { ...this.garage });
       this.render();
@@ -297,8 +405,9 @@ export class Menu {
   }
 
   // Lista do ranking da pista + carro escolhidos, com a opção de fantasma marcada.
-  renderRanking(track, car) {
-    const list = loadRanking(this.settings.track, this.settings.car);
+  renderRanking(car) {
+    const track = trackById(this.rankTrack);
+    const list = loadRanking(track.id, this.settings.car);
     const picked = pickGhost(list, this.settings.ghost);
     const choice = this.settings.ghost === 'none' ? 'none' : picked?.id;
     const timeName = (id) => track.times.find((t) => t.id === id)?.name.toLowerCase() ?? '';
@@ -314,6 +423,56 @@ export class Menu {
       : `<p class="rank-empty">Nenhuma volta de ${car.name} em ${track.name} ainda. Complete uma volta pontuando para entrar no ranking.</p>`;
     const ghostLine = document.getElementById('ghost-line');
     ghostLine.textContent = choice === 'none' ? 'Fantasma: desligado' : picked ? `Fantasma: ${list.indexOf(picked) + 1}º do ranking · ${formatPoints(picked.points)} pts` : 'Fantasma: nenhuma volta gravada com este carro';
+  }
+
+  // Perfil: título, estatísticas de carreira e medalhas com progresso e item liberado
+  renderProfile() {
+    const p = loadProfile();
+    const title = driverTitle(p);
+    const got = ACHIEVEMENTS.filter((a) => p.unlocked[a.id]).length;
+    const hours = Math.floor(p.seconds / 3600), minutes = Math.floor((p.seconds % 3600) / 60);
+    const fav = (entries, name) => {
+      const best = entries.sort((a, b) => b[1] - a[1])[0];
+      return best && best[1] > 0.05 ? `${name(best[0])} · ${best[1].toFixed(1)} km` : '—';
+    };
+    const favTrack = fav(Object.entries(p.byTrack).map(([id, t]) => [id, t.km]), (id) => trackById(id).name);
+    const favCar = fav(Object.entries(p.byCar), (id) => CARS.find((c) => c.id === id)?.name ?? id);
+    const stat = (label, value, cls = '') => `<div class="${cls === 'small' ? 'wide' : ''}"><span>${label}</span><b class="${cls}">${value}</b></div>`;
+    const medalCounts = MEDALS.map((m) => [m, ACHIEVEMENTS.filter((a) => a.medal === m && p.unlocked[a.id]).length]);
+    document.getElementById('profile-body').innerHTML = `
+      <div class="profile-head">
+        <div class="profile-title"><b>${title.name}</b><span class="jp">${title.jp}</span></div>
+        <div class="profile-medals">${medalCounts.map(([m, c]) => `<span data-medal="${m}"><i class="medal"></i>×${c}</span>`).join('')}</div>
+        <small>${title.next ? `${title.score} pontos de medalha · próximo título: ${title.next.name} com ${title.next.at}` : `${title.score} pontos de medalha · título máximo`} · pilotando desde ${p.since.split('-').reverse().join('/')}</small>
+      </div>
+      <div class="profile-stats">
+        ${stat('KM RODADOS', p.km.toLocaleString('pt-BR', { maximumFractionDigits: 1 }), 'amber')}
+        ${stat('AO VOLANTE', hours ? `${hours} h ${minutes} min` : `${minutes} min`)}
+        ${stat('CORRIDAS', `${p.finished} <small>de ${p.races}</small>`)}
+        ${stat('VITÓRIAS · PÓDIOS', `${p.wins} · ${p.podiums}`, 'amber')}
+        ${stat('VOLTAS', p.laps)}
+        ${stat('PONTOS NA CARREIRA', formatPoints(p.points))}
+        ${stat('MAIOR COMBO', formatPoints(p.bestCombo), 'amber')}
+        ${stat('MELHOR VOLTA', formatPoints(p.bestLap))}
+        ${stat('MELHOR CORRIDA', formatPoints(p.bestRace))}
+        ${stat('MAIOR ÂNGULO', `${Math.round(p.maxAngle)}°`, 'amber')}
+        ${stat('DRIFT MAIS LONGO', `${Math.round(p.longestDrift).toLocaleString('pt-BR')} m`)}
+        ${stat('BATIDAS NA MURETA', p.wallHits)}
+        ${stat('PISTA FAVORITA', favTrack, 'small')}
+        ${stat('CARRO FAVORITO', favCar, 'small')}
+      </div>
+      <div class="results-grades profile-grades"><span>NOTAS DAS CURVAS</span>${Object.entries(p.grades).map(([g, c]) => `<b data-grade="${g}">${g}<small>×${c}</small></b>`).join('')}</div>
+      <div class="caption profile-caption">MEDALHAS · ${got}/${ACHIEVEMENTS.length}</div>
+      <div class="medal-grid">${ACHIEVEMENTS.map((a) => {
+        const pr = progressOf(a, p), on = !!p.unlocked[a.id], reward = rewardOf(a.id);
+        return `<div class="medal-card ${on ? 'got' : 'locked'}" data-nav data-medal="${a.medal}">
+          <i class="medal"></i>
+          <div><b>${a.name}</b><small>${a.description}</small>
+            <div class="medal-progress"><i style="width:${Math.round(pr.ratio * 100)}%"></i></div>
+            <small class="medal-foot">${on ? `liberada em ${p.unlocked[a.id].split('-').reverse().join('/')}` : pr.text}${reward ? ` · ${on ? 'liberou' : 'libera'} ${reward.slotName}: ${reward.item.name}` : ''}</small>
+          </div>
+        </div>`;
+      }).join('')}</div>`;
   }
 
   setDifficulty(key) {
@@ -341,24 +500,30 @@ export class Menu {
     }
     document.getElementById('difficulty-text').textContent = DIFFICULTIES[this.difficulty].description;
 
-    const track = TRACKS.find((t) => t.id === this.settings.track);
+    const randomTrack = this.settings.track === RANDOM, randomTime = this.settings.time === RANDOM;
+    const track = randomTrack ? null : trackById(this.settings.track);
     const car = CARS.find((c) => c.id === this.settings.car);
     document.getElementById('garage-car').textContent = `${car.name} · ${car.jp}`;
-    this.renderRanking(track, car);
-    document.getElementById('track-info').textContent = `${Math.round(this.previewTrack.length)} m · ${track.description} ${timeOf(track, this.settings.time).description}`;
+    this.renderRanking(car);
+    if (this.current === 'profile') this.renderProfile();
+    document.getElementById('track-info').textContent = randomTrack
+      ? `Pista e horário sorteados a cada largada entre: ${TRACKS.map((t) => t.name.toLowerCase()).join(', ')}.`
+      : `${Math.round(this.previewTrack.length)} m · ${track.description} ${randomTime ? `Horário sorteado a cada largada (${track.times.map((t) => t.name.toLowerCase()).join(', ')}).` : timeOf(track, this.settings.time).description}`;
     this.drawTrack();
     this.drawSpecs(car);
 
-    const record = this.record();
+    const record = randomTrack ? null : this.record();
     document.getElementById('record-line').textContent = this.settings.laps === 0
       ? 'Treino livre: sem chegada, voltas contam para o recorde de volta.'
-      : record ? `Recorde (${lapLabel(this.settings.laps).toLowerCase()}): ${formatPoints(record.points)} pts` : 'Sem recorde nesta configuração ainda.';
+      : randomTrack ? 'Pista aleatória: o recorde fica salvo na pista sorteada.'
+        : record ? `Recorde (${lapLabel(this.settings.laps).toLowerCase()}): ${formatPoints(record.points)} pts` : 'Sem recorde nesta configuração ainda.';
   }
 
   drawTrack() {
     const canvas = document.getElementById('track-preview');
     const ctx = canvas.getContext('2d');
     const { width: w, height: h } = canvas;
+    if (this.settings.track === RANDOM) { this.drawRandomTracks(ctx, w, h); return; }
     const { N, x, z } = this.previewTrack;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (let j = 0; j < N; j++) {
@@ -391,6 +556,45 @@ export class Menu {
     ctx.fillText('LARGADA', lx + 12, ly + 5);
   }
 
+  // Pista aleatória: as pistas lado a lado, apagadas, com um "?" por cima
+  drawRandomTracks(ctx, w, h) {
+    ctx.clearRect(0, 0, w, h);
+    const cell = w / TRACKS.length, pad = 14;
+    TRACKS.forEach((def, k) => {
+      const { N, x, z } = this.trackShape(def.id);
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (let j = 0; j < N; j++) {
+        minX = Math.min(minX, x[j]); maxX = Math.max(maxX, x[j]);
+        minZ = Math.min(minZ, z[j]); maxZ = Math.max(maxZ, z[j]);
+      }
+      const s = Math.min((cell - pad * 2) / (maxX - minX), (h - pad * 2 - 20) / (maxZ - minZ));
+      const ox = k * cell + (cell - (maxX - minX) * s) / 2, oz = (h - 20 - (maxZ - minZ) * s) / 2;
+      ctx.beginPath();
+      for (let j = 0; j <= N; j++) {
+        const sx = ox + (maxX - x[j % N]) * s, sy = oz + (maxZ - z[j % N]) * s;
+        if (j === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+      }
+      ctx.strokeStyle = 'rgba(61,255,196,0.35)';
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(111,156,146,0.9)';
+      ctx.font = '15px VT323, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(def.jp, k * cell + cell / 2, h - 6);
+    });
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '120px VT323, monospace';
+    ctx.fillStyle = '#ffb13b';
+    ctx.shadowColor = '#ffb13b';
+    ctx.shadowBlur = 14;
+    ctx.fillText('?', w / 2, h / 2 - 8);
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
   drawSpecs(car) {
     const s = carSpecs(car);
     const bar = (value, max) => {
@@ -415,17 +619,19 @@ export class Menu {
     this.show('pause');
   }
 
-  recordKey() {
-    return `${this.settings.track}:${this.settings.car}:${this.settings.laps}`;
+  // Recorde por pista, carro e voltas. No resultado vale a pista que foi sorteada.
+  recordKey(track = this.settings.track) {
+    return `${track}:${this.settings.car}:${this.settings.laps}`;
   }
 
   record() {
     return readJSON(RECORDS_KEY, {})[this.recordKey()] || null;
   }
 
-  showResults({ laps, total, bestCombo, time, difficulty, bestLap, standings = [], grades = null, rankBest = 0 }) {
+  showResults({ laps, total, bestCombo, time, difficulty, bestLap, standings = [], grades = null, rankBest = 0, achievements = [] }) {
     const records = readJSON(RECORDS_KEY, {});
-    const key = this.recordKey();
+    const raced = this.active ?? this.settings;
+    const key = this.recordKey(raced.track);
     const previous = records[key];
     const isRecord = total > 0 && (!previous || total > previous.points);
     if (isRecord) {
@@ -433,7 +639,7 @@ export class Menu {
       writeJSON(RECORDS_KEY, records);
     }
     const bestPoints = Math.max(...laps.map((l) => l.points));
-    const track = TRACKS.find((t) => t.id === this.settings.track);
+    const track = trackById(raced.track);
     const car = CARS.find((c) => c.id === this.settings.car);
     const position = standings.findIndex((r) => r.player) + 1;
     const standingsHtml = standings.length > 1 ? `
@@ -457,6 +663,10 @@ export class Menu {
         ${bestLap ? '<div><span>VOLTA DE MAIS PONTOS</span><b class="amber">RECORDE DA PISTA</b></div>' : ''}
         ${rankBest ? `<div><span>RANKING DE VOLTAS</span><b class="amber">${rankBest}º LUGAR</b></div>` : ''}
       </div>
+      ${achievements.length ? `<div class="results-medals"><span>MEDALHAS NOVAS</span>${achievements.map((a) => {
+        const reward = rewardOf(a.id);
+        return `<div class="medal-chip" data-medal="${a.medal}"><i class="medal"></i><b>${a.name}</b><small>${reward ? `liberou ${reward.slotName}: ${reward.item.name}` : a.description}</small></div>`;
+      }).join('')}</div>` : ''}
       ${grades && Object.values(grades).some(Boolean) ? `<div class="results-grades"><span>NOTAS DAS CURVAS</span>${Object.entries(grades).filter(([, n]) => n).map(([g, n]) => `<b data-grade="${g}">${g}<small>×${n}</small></b>`).join('')}</div>` : ''}`;
     this.focusIndex.results = 0;
     this.show('results');

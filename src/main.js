@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { CAR, ENV, createCar, resetCar, stepCar, shift, paramsOf, setCarParams } from './physics.js';
-import { nearestIndex, lateralOffset, carSurfaces, SURFACES, WALL_OFFSET } from './track.js';
+import { nearestIndex, lateralOffset, carSurfaces, followGround, groundAt, SURFACES, WALL_OFFSET } from './track.js';
 import { collideWalls, CAR_HALF_LENGTH, CAR_HALF_WIDTH } from './walls.js';
 import { DriftScorer, DRIFT } from './drift.js';
 import { buildWorld } from './world.js';
 import { buildFujimiWorld } from './worldFujimi.js';
+import { buildHakoneWorld } from './worldHakone.js';
 import { createCarModel } from './carModel.js';
 import { Input } from './input.js';
 import { LapTimer, formatPoints } from './laps.js';
@@ -17,12 +18,14 @@ import { StyleJudge } from './styleJudge.js';
 import { ReplayRecorder, ReplayDirector } from './replay.js';
 import { loadGarage, garageLook } from './garage.js';
 import { loadRanking, submitLap, pickGhost, unpackGhost } from './ranking.js';
+import { ProfileTracker } from './profile.js';
+import { rewardOf } from './achievements.js';
 import { FreeCamera } from './freeCam.js';
 import { PS2Pipeline } from './ps2.js';
 import { DIFFICULTIES, DIFFICULTY_ORDER, applyDifficulty, loadDifficulty, saveDifficulty } from './difficulty.js';
 import { installMist, fogUniforms } from './fog.js';
 import { DebugPanel } from './debug.js';
-import { Menu, savedSettings } from './menu.js';
+import { Menu, savedSettings, RANDOM } from './menu.js';
 import { carById, trackById, timeOf, TRACKS } from './catalog.js';
 import { Rivals } from './rivals.js';
 import { gridSlot, MAX_RACERS } from './race.js';
@@ -57,7 +60,7 @@ addEventListener('resize', () => {
 // --- Mundo -----------------------------------------------------------------------------------
 // Cada pista monta o seu cenário uma vez e fica em cache (escondido quando não está em uso).
 // Horário e clima só trocam luz, céu e efeitos (world.setTime): nada é remontado.
-const WORLDS = { city: buildWorld, fujimi: buildFujimiWorld };
+const WORLDS = { city: buildWorld, fujimi: buildFujimiWorld, hakone: buildHakoneWorld };
 let track = null;
 let world = null;
 let trackId = null;
@@ -69,6 +72,8 @@ function applyAtmosphere() {
   fogUniforms.uMistColor.value.copy(world.atmosphere.mistColor);
   fogUniforms.uMistDensity.value = world.atmosphere.mistDensity ?? 0.034;
   fogUniforms.uMistFalloff.value = world.atmosphere.mistFalloff ?? 0.34;
+  fogUniforms.uMistBase.value = world.atmosphere.mistBase ?? 0; // serra: a névoa mora no vale
+  skids?.setWet(!!world.atmosphere.rain);
 }
 
 const worldCache = new Map(); // id da pista -> { track, world }
@@ -109,6 +114,9 @@ const LOADING_TIPS = [
   'Na garagem dá para trocar pintura, rodas, aerofólio e a cor do rastro.',
   'No ranking dá para escolher contra qual fantasma correr.',
   'Tecla F: câmera livre para passear pelo mapa.',
+  'Na serra a descida embala o carro: freie antes dos grampos.',
+  'Cada medalha do perfil libera uma pintura, roda, adesivo ou rastro na garagem.',
+  'Raspar na mureta solta faíscas; bater de verdade zera o combo.',
 ];
 const loadingEl = document.getElementById('loading');
 let loadingChain = Promise.resolve();
@@ -154,6 +162,17 @@ function updateLampLights() {
 }
 
 const car = createCar();
+// Perfil do piloto e conquistas (estatísticas de carreira, medalhas que liberam itens da garagem)
+const profile = new ProfileTracker();
+let achievementTimer = 0;
+const raceAchievements = [];
+function announceAchievements() {
+  for (const a of profile.checkAchievements()) {
+    raceAchievements.push(a);
+    const reward = rewardOf(a.id);
+    hud.toast(`Medalha ${a.medal}: ${a.name}${reward ? ` · libera ${reward.slotName}` : ''}`, 'best', 3600);
+  }
+}
 let carModel = null;
 let ghostModel = null;
 let playerCarId = null;
@@ -167,7 +186,7 @@ function captureEnv(w = world, t = track) {
   hidden.forEach((o) => { o.visible = false; });
   const wasVisible = w.root.visible;
   w.root.visible = true;
-  envCamera.position.set(t.x[0], 2.5, t.z[0]);
+  envCamera.position.set(t.x[0], (t.y?.[0] ?? 0) + 2.5, t.z[0]);
   w.update(0, envCamera);
   envCamera.update(renderer, scene);
   w.root.visible = wasVisible;
@@ -202,7 +221,7 @@ function setPlayerCar(id, force = false) {
   audio.setEngine(def.engine);
   carModel?.dispose();
   ghostModel?.dispose();
-  const look = garageLook(loadGarage(def.id));
+  const look = garageLook(loadGarage(def.id, profile.unlocked));
   carModel = createCarModel({ design: def.design, look });
   driftTrail.setColor(look.trail);
   carModel.setEnvMap(envTarget.texture);
@@ -233,7 +252,12 @@ function addDamage(hit, dt, scrape) {
   }
 }
 
-const skids = new SkidMarks(scene);
+var skids = new SkidMarks(scene); // var: applyAtmosphere roda antes desta linha na montagem inicial
+skids.setWet(!!world.atmosphere.rain);
+// Luz laranja das faíscas: pisca no ponto do raspão, mais forte quanto mais faísca
+const sparkLight = new THREE.PointLight(0xff8a30, 0, 9, 1.6);
+scene.add(sparkLight);
+let sparkGlow = 0;
 const particles = new Particles(scene);
 const driftTrail = new DriftTrail(scene);
 const timer = new LapTimer(track);
@@ -259,6 +283,14 @@ function startReplay() {
   replayTag.hidden = false;
 }
 
+// Altura e inclinação de um carro gravado (replay) ou do fantasma, a partir da pista
+function groundPose(p) {
+  if (!track.y) { p.y = 0; p.pitch = 0; return p; }
+  p.idx = nearestIndex(track, p.x, p.z, p.idx ?? -1);
+  followGround(p, track, p.idx);
+  return p;
+}
+
 function stopReplay() {
   if (!replay.playing) return;
   replay.playing = false;
@@ -272,10 +304,12 @@ function updateReplay(dt) {
   if (replay.t >= recorder.duration) { replay.t = 0; driftTrail.clear(); director.reset(); }
   const [me, ...others] = replay.proxies;
   recorder.sample(0, replay.t, me);
+  groundPose(me);
   carModel.update(me);
   rivals.list.forEach((e, i) => {
     const p = others[i];
     if (!p || !recorder.sample(i + 1, replay.t, p)) return;
+    groundPose(p);
     e.model.update(p);
     const d = Math.hypot(p.x - camera.position.x, p.z - camera.position.z);
     e.model.setDetail(d < 28);
@@ -287,7 +321,7 @@ function updateReplay(dt) {
     const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw), lx = fz, lz = -fx;
     for (const side of [0.8, -0.8]) {
       const count = p.skid * dt * 11 * (0.4 + Math.min(1, p.speed / 25));
-      for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(p.x + lx * side - fx * 1.35, p.z + lz * side - fz * 1.35, p.vx, p.vz, p.skid);
+      for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(p.x + lx * side - fx * 1.35, p.z + lz * side - fz * 1.35, p.vx, p.vz, p.skid, p.y || 0);
     }
   }
   driftTrail.update(dt, me, carModel.tailLights, { active: me.mult > 0, angle: Math.abs(me.driftAngle) * 57.2958, idle: 0, mult: me.mult || 1 }, camera);
@@ -333,6 +367,7 @@ function placeOnTrack(i) {
   const j = (i + track.N) % track.N;
   resetCar(car, track.x[j], track.z[j], Math.atan2(track.tx[j], track.tz[j]));
   idx = j;
+  followGround(car, track, idx);
   skids.last.clear();
   driftTrail.clear();
 }
@@ -376,11 +411,12 @@ function updateOrbit(dt) {
 function updateCamera(dt, rumble) {
   if (window.game?.freeCamera) return; // depuração: câmera posicionada pelo console
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
+  const cy = car.y || 0, slope = Math.tan(car.pitch || 0);
   if (camMode === 2) {
     // No capô a órbita vira "olhar em volta".
     const lookYaw = car.yaw + orbit.yaw;
-    camera.position.set(car.x + fx * 0.9, 1.08, car.z + fz * 0.9);
-    camera.lookAt(car.x + fx * 0.9 + Math.sin(lookYaw) * 12, 0.95 + orbit.pitch * 6, car.z + fz * 0.9 + Math.cos(lookYaw) * 12);
+    camera.position.set(car.x + fx * 0.9, cy + 1.08 + slope * 0.9, car.z + fz * 0.9);
+    camera.lookAt(car.x + fx * 0.9 + Math.sin(lookYaw) * 12, cy + 0.95 + slope * 12.9 * Math.max(0, Math.cos(orbit.yaw)) + orbit.pitch * 6, car.z + fz * 0.9 + Math.cos(lookYaw) * 12);
     camera.fov = 70 + config.fov;
   } else {
     const far = camMode === 1 && !garageView;
@@ -391,10 +427,15 @@ function updateCamera(dt, rumble) {
     const yaw = camYaw + orbit.yaw;
     const flat = dist * Math.cos(orbit.pitch * 0.6);
     tmp.set(car.x - Math.sin(yaw) * flat, height + Math.sin(orbit.pitch) * dist, car.z - Math.cos(yaw) * flat);
+    // Rampa: sobe junto com o carro e nunca fica abaixo do asfalto atrás dele
+    if (track.y) {
+      const behind = groundAt(track, nearestIndex(track, tmp.x, tmp.z, idx, 12), tmp.x, tmp.z);
+      tmp.y += Math.max(cy, behind);
+    }
     // Girando com o analógico a câmera acompanha na hora; senão, suaviza.
     camera.position.lerp(tmp, orbit.idle < 0.2 ? 1 : 1 - Math.exp(-dt * 12));
     const ahead = 3 * Math.max(0, Math.cos(orbit.yaw));
-    camTarget.set(car.x + Math.sin(camYaw) * ahead, 1.0, car.z + Math.cos(camYaw) * ahead);
+    camTarget.set(car.x + Math.sin(camYaw) * ahead, cy + 1.0 + slope * ahead, car.z + Math.cos(camYaw) * ahead);
     camera.lookAt(camTarget);
     camera.fov = 62 + config.fov + Math.min(14, car.speed * 0.22);
   }
@@ -442,6 +483,7 @@ function placeOnGrid() {
   const slot = rivalCount === 0 ? gridSlot(track, MAX_RACERS - 1, 0) : gridSlot(track, rivalCount);
   resetCar(car, slot.x, slot.z, slot.yaw);
   idx = slot.idx;
+  followGround(car, track, idx);
   skids.last.clear();
   driftTrail.clear();
 }
@@ -497,6 +539,9 @@ function beginRace(settings) {
   resetRaceState();
   car.automatic = config.gearbox === 'auto';
   if (car.automatic && car.gear === 0) car.gear = 1;
+  if (profile.race) profile.abandon();
+  profile.startRace({ track: trackId, time: timeId, car: playerCarId, laps: race.laps, racers: race.racers, difficulty });
+  raceAchievements.length = 0;
   race.phase = 'countdown';
   race.countdown = 3;
   menu.hide();
@@ -524,6 +569,7 @@ function resumeGame() {
 }
 
 function quitToMenu() {
+  if (profile.race) profile.abandon();
   race.phase = 'menu';
   resetRaceState();
   paused = true;
@@ -542,7 +588,11 @@ function showResults() {
   startReplay();
   audio.suspend(true);
   rivals.bankAll();
+  const finalStandings = rivals.standings({ ...playerRow(), points: scorer.total, finished: true });
+  profile.finish({ position: finalStandings.findIndex((r) => r.player) + 1, racers: finalStandings.length, total: scorer.total });
+  announceAchievements();
   menu.showResults({
+    achievements: [...raceAchievements],
     laps: race.results, total: scorer.total, bestCombo: scorer.best, time: race.time, difficulty, bestLap: race.bestLap, grades: { ...judge.counts }, rankBest: race.rankBest,
     standings: rivals.standings({ ...playerRow(), points: scorer.total, finished: true }),
   });
@@ -589,14 +639,18 @@ const menu = new Menu({
   difficulty,
   onStart: startRace,
   onResume: resumeGame,
+  // Reiniciar repete a pista e o horário que saíram no sorteio; "correr de novo" no resultado sorteia outra vez
   onRestart: () => startRace({ laps: race.laps, racers: race.racers, car: playerCarId, track: trackId, time: timeId }),
   // Na tela inicial o grid mostra quantos vão correr.
   onSettings: (settings) => {
     if (race.phase !== 'menu') return;
-    if (needsBuild(settings.track)) {
-      const def = trackById(settings.track);
-      withLoading(def, timeOf(def, settings.time), () => switchTrack(settings.track, settings.time));
-    } else switchTrack(settings.track, settings.time);
+    // Aleatória: o fundo do menu fica na pista atual (o sorteio é na largada)
+    const id = settings.track === RANDOM ? trackId : settings.track;
+    const time = settings.time === RANDOM ? (trackById(id).id === trackId ? timeId : undefined) : settings.time;
+    if (needsBuild(id)) {
+      const def = trackById(id);
+      withLoading(def, timeOf(def, time), () => switchTrack(id, time));
+    } else switchTrack(id, time);
     setPlayerCar(settings.car);
     applyRanking();
     race.racers = settings.racers;
@@ -668,6 +722,7 @@ function toggleFreeCam(on = !freeCam.active) {
 debug.onFreeCam = () => toggleFreeCam();
 
 // --- Loop ----------------------------------------------------------------------------------------
+const ghostGround = { x: 0, z: 0, yaw: 0, y: 0, pitch: 0, idx: -1 };
 let last = performance.now();
 let fps = 60;
 let rumble = false;
@@ -745,6 +800,7 @@ function simulate(dt) {
     [sf, sr] = carSurfaces(track, car, idx, paramsOf(car).a, paramsOf(car).b);
     stepCar(car, inp, STEP, sf, sr);
     idx = nearestIndex(track, car.x, car.z, idx);
+    followGround(car, track, idx);
     const hit = collideWalls(car, track, idx);
     if (hit && (!impact || hit.speed > impact.speed)) impact = hit;
     for (const c of rivals.step(STEP, car)) {
@@ -763,6 +819,8 @@ function simulate(dt) {
   // Pontuação (só com a corrida valendo)
   if (race.phase === 'running') {
     race.time += simDt;
+    if (impact && impact.speed > DRIFT.wallImpact && !race.wallContact) profile.wallHit();
+    race.wallContact = !!impact;
     const onGrass = sf === SURFACES.offroad && sr === SURFACES.offroad;
     scorer.update(simDt, {
       angle: car.driftAngle, speed: car.speed, onGrass,
@@ -777,13 +835,14 @@ function simulate(dt) {
 
   let comboLost = false;
   for (const ev of scorer.events.splice(0)) {
-    if (ev.type === 'bank') { hud.popup(`+${formatPoints(ev.points)}`, 'bank'); driftTrail.flash('bank'); }
+    if (ev.type === 'bank') { hud.popup(`+${formatPoints(ev.points)}`, 'bank'); driftTrail.flash('bank'); profile.bank(ev.points); }
     else if (ev.type === 'bonus') hud.bonus(ev.label, ev.points);
     else if (ev.type === 'lost') { hud.popup(LOST_REASON[ev.reason], 'lost'); input.hit(0.7, 260); driftTrail.flash('lost'); comboLost = true; }
   }
   for (const ev of timer.events.splice(0)) {
     const { samples, ...lap } = ev;
     race.results.push(lap);
+    profile.lap(ev.points);
     // Ranking de voltas por pista e carro (com o fantasma desta volta)
     const rank = submitLap(trackId, playerCarId, { points: ev.points, time: ev.time, difficulty, timeOfDay: timeId }, samples);
     if (rank) { race.rankBest = race.rankBest ? Math.min(race.rankBest, rank) : rank; hud.toast(`Volta no ranking: ${rank}º lugar`, 'best', 2600); }
@@ -798,8 +857,9 @@ function simulate(dt) {
   rivals.effects(simDt, skids, particles, camera);
 
   // Batida em outro carro: faíscas no ponto de contato
+  const groundY = car.y || 0;
   if (carHit && carHit.speed > 0.8) {
-    particles.sparks(carHit.x, carHit.z, carHit.nx, carHit.nz, carHit.speed);
+    particles.sparks(carHit.x, carHit.z, carHit.nx, carHit.nz, carHit.speed, groundY, car.vx * 0.5, car.vz * 0.5);
     audio.impact(carHit.speed);
     if (carHit.speed > 1.5) { shake = Math.min(0.4, shake + carHit.speed * 0.03); input.hit(Math.min(1, 0.25 + carHit.speed * 0.08), 200); }
   }
@@ -810,9 +870,12 @@ function simulate(dt) {
   if (impact) {
     const strength = impact.speed;
     if (strength > 0.6) {
-      particles.sparks(impact.x, impact.z, impact.nx, impact.nz, strength);
+      particles.sparks(impact.x, impact.z, impact.nx, impact.nz, strength, groundY, car.vx, car.vz);
       audio.impact(strength);
     }
+    // Raspando: jato contínuo de faíscas enquanto encosta andando
+    particles.grind(impact.x, impact.z, impact.nx, impact.nz, car.vx, car.vz, simDt, groundY);
+    sparkLight.position.set(impact.x + impact.nx * 0.6, groundY + 0.5, impact.z + impact.nz * 0.6);
     if (strength > 1.5) {
       shake = Math.min(0.4, shake + strength * 0.03);
       input.hit(Math.min(1, 0.25 + strength * 0.08), 200);
@@ -827,16 +890,24 @@ function simulate(dt) {
   const { a: axleF, b: axleR } = paramsOf(car);
   const wheels = [['fl', 0.8, axleF, frontSkid, sf], ['fr', -0.8, axleF, frontSkid, sf], ['rl', 0.8, -axleR, rearSkid, sr], ['rr', -0.8, -axleR, rearSkid, sr]];
   for (const [key, ox, oz, amount, surf] of wheels) {
-    const wx = car.x + lx * ox + fx * oz, wz = car.z + lz * ox + fz * oz;
+    const wx = car.x + lx * ox + fx * oz, wz = car.z + lz * ox + fz * oz, wy = groundY + Math.sin(car.pitch || 0) * oz;
     const onTarmac = surf === SURFACES.asphalt;
-    skids.add(key, wx, wz, lx, lz, amount > 0.3 && onTarmac);
+    skids.add(key, wx, wz, lx, lz, amount > 0.3 && onTarmac, amount, wy);
     // Chuva: spray d'água levantado pelas rodas traseiras
-    if (world.atmosphere.rain && key[0] === 'r' && car.speed > 8 && Math.random() < simDt * car.speed * 0.5) particles.smoke(wx, wz, car.vx, car.vz, 0.15);
+    if (world.atmosphere.rain && key[0] === 'r' && car.speed > 8 && Math.random() < simDt * car.speed * 0.5) particles.smoke(wx, wz, car.vx, car.vz, 0.15, wy);
     if (onTarmac && amount > 0.25 && key[0] === 'r') {
       const count = amount * simDt * 13 * (0.4 + Math.min(1, car.speed / 25));
-      for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(wx, wz, car.vx, car.vz, amount);
+      for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(wx, wz, car.vx, car.vz, amount, wy);
     }
   }
+  // Perfil: distância, ângulo e drift mais longo; medalhas conferidas uma vez por segundo
+  if (race.phase === 'running' && simDt > 0) {
+    profile.drive(simDt, { speed: car.speed, angle: Math.abs(car.driftAngle) * 57.2958, combo: scorer.active, drifting: scorer.active && scorer.idle === 0 });
+    profile.tick(simDt);
+    achievementTimer += simDt;
+    if (achievementTimer > 1) { achievementTimer = 0; announceAchievements(); }
+  }
+
   // Nota de estilo por curva
   if (race.phase === 'running' && simDt > 0) {
     judge.update(simDt, {
@@ -845,6 +916,7 @@ function simulate(dt) {
       failed: comboLost || (impact && impact.speed > DRIFT.wallImpact) || (carHit && carHit.speed > DRIFT.carImpact),
     });
     for (const ev of judge.events.splice(0)) {
+      profile.grade(ev.grade);
       hud.grade(ev);
       scorer.styleBonus(ev.grade, ev.bonus);
     }
@@ -884,7 +956,11 @@ function frame(now) {
   if (!paused && !freeCam.active) audio.updateRivals(rivals.list, camera, dt);
   const pose = showGhost && !replay.playing ? timer.ghostPose() : null;
   ghostModel.root.visible = !!pose;
-  if (pose) ghostModel.setPose(pose.x, pose.z, pose.yaw);
+  if (pose) {
+    ghostGround.x = pose.x; ghostGround.z = pose.z; ghostGround.yaw = pose.yaw;
+    groundPose(ghostGround);
+    ghostModel.setPose(pose.x, pose.z, pose.yaw, ghostGround.y, ghostGround.pitch);
+  }
 
   if (freeCam.active) freeCam.update(dt);
   else if (!replay.playing) {
@@ -892,6 +968,10 @@ function frame(now) {
     updateCamera(paused ? 0.016 : dt, rumble && !paused);
   }
   particles.update((paused && !replay.playing) || freeCam.active ? 0 : dt, camera, pipeline.internalHeight);
+  // Luz das faíscas: acende com as que nasceram neste quadro e apaga rápido, tremendo
+  sparkGlow = Math.max(sparkGlow * Math.exp(-dt * 14), Math.min(1, particles.sparkLevel / 6));
+  particles.sparkLevel = 0;
+  sparkLight.intensity = sparkGlow * (14 + Math.random() * 10);
   updateLampLights();
   world.update(now / 1000, camera);
   fogUniforms.uFogTime.value = now / 1000;
@@ -929,7 +1009,7 @@ async function loadCustomCar() {
 loadCustomCar();
 
 // Acesso pelo console para depuração e ajuste de acerto (ex.: game.CAR.counterSteer = 0.7).
-window.game = { car, damage, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
+window.game = { car, damage, profile, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
 
 // Posiciona a câmera antes do primeiro frame para não "voar" até o carro.
 camera.position.set(car.x - Math.sin(car.yaw) * 6.6, 2.4, car.z - Math.cos(car.yaw) * 6.6);

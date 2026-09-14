@@ -110,10 +110,14 @@ export class DriftDriver {
     // Perfil de velocidade: curvas à frente + frenagem planejada. Na chuva a IA tira mais do que a perda de aderência.
     const wetGrip = ENV.grip ** (1 + P.wetCare);
     let allowed = P.topSpeed * pace;
+    const grade = track.grade;
     for (let d = 0; d < 160; d += 4) {
-      const c = Math.abs(curv[at(d)]);
+      const k = at(d);
+      const c = Math.abs(curv[k]);
+      // Descida: a gravidade tira parte da frenagem (subida ajuda a frear)
+      const decel = Math.max(2, P.decel * ENV.grip + (grade ? grade[k] * 9.81 : 0));
       const vCorner = c > 1e-4 ? Math.sqrt((paramsOf(car).mu * wetGrip * 9.81 * P.cornerPace * pace) / c) : 90;
-      allowed = Math.min(allowed, Math.sqrt(vCorner * vCorner + 2 * P.decel * ENV.grip * d));
+      allowed = Math.min(allowed, Math.sqrt(vCorner * vCorner + 2 * decel * d));
     }
     allowed = Math.max(0, Math.min(allowed, followLimit));
     const diff = allowed - speed;

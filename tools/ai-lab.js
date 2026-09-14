@@ -1,8 +1,8 @@
 // Laboratório da IA: simula corredores de IA na pista, sem navegador, e mostra ritmo, pontos e batidas.
-// Uso: node tools/ai-lab.js [bots=1] [voltas=3] [skill=0.8]   (TRACK=fujimi CAR=seiran para variar)
+// Uso: node tools/ai-lab.js [bots=1] [voltas=3] [skill=0.8]   (TRACK=fujimi|hakone CAR=seiran para variar)
 import { createCar, stepCar, setCarParams, ENV } from '../src/physics.js';
 import { carById } from '../src/catalog.js';
-import { buildTrack, FUJIMI_POINTS, nearestIndex, carSurfaces, SURFACES } from '../src/track.js';
+import { buildTrack, FUJIMI_POINTS, HAKONE_POINTS, nearestIndex, carSurfaces, followGround, SURFACES } from '../src/track.js';
 import { collideWalls } from '../src/walls.js';
 import { DriftScorer } from '../src/drift.js';
 import { LapTimer } from '../src/laps.js';
@@ -14,7 +14,8 @@ import { gridSlot, RIVALS } from '../src/race.js';
 const DT = 1 / 240;
 if (process.env.GRIP) ENV.grip = Number(process.env.GRIP); // chuva: GRIP=0.8
 const [bots = 1, laps = 3, skill = 0.8] = process.argv.slice(2).map(Number);
-const track = process.env.TRACK === 'fujimi' ? buildTrack(FUJIMI_POINTS) : buildTrack();
+const TRACK_POINTS = { fujimi: FUJIMI_POINTS, hakone: HAKONE_POINTS };
+const track = buildTrack(TRACK_POINTS[process.env.TRACK]);
 const racers = [];
 for (let i = 0; i < bots; i++) {
   const slot = gridSlot(track, i);
@@ -38,9 +39,13 @@ for (; t < limit && racers.some((r) => r.finished === null); t += DT) {
     const [sf, sr] = carSurfaces(track, r.car, r.idx, r.car.params.a, r.car.params.b);
     stepCar(r.car, inp, DT, sf, sr); // depois da chegada continua andando (volta de desaceleração)
     r.idx = nearestIndex(track, r.car.x, r.car.z, r.idx);
+    followGround(r.car, track, r.idx); // rampa (só nas pistas com altura)
     const hit = collideWalls(r.car, track, r.idx);
     r.impact = hit ? hit.speed : 0;
-    if (hit && hit.speed > 1.2) r.walls++;
+    if (hit && hit.speed > 1.2) {
+      r.walls++;
+      if (process.env.DEBUG) console.log(`parede idx=${r.idx} (${track.x[r.idx].toFixed(0)}, ${track.z[r.idx].toFixed(0)}) v=${r.car.speed.toFixed(1)} impacto=${hit.speed.toFixed(1)}`);
+    }
   }
   const contacts = collideCars(racers.map((r) => r.car));
   for (const c of contacts) {

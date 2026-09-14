@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { paramsOf, createCar, resetCar, stepCar, setCarParams } from './physics.js';
 import { carById } from './catalog.js';
-import { nearestIndex, carSurfaces, lateralOffset, WALL_OFFSET } from './track.js';
+import { nearestIndex, carSurfaces, lateralOffset, followGround, WALL_OFFSET } from './track.js';
 import { collideWalls } from './walls.js';
 import { collideCars } from './traffic.js';
 import { DriftScorer } from './drift.js';
@@ -83,6 +83,7 @@ export class Rivals {
       Object.assign(e.car, { vx: 0, vz: 0, r: 0, gear: 1, automatic: true });
       applyDifficulty(e.car, 'facil'); // a IA pilota com o controle de ângulo
       e.idx = slot.idx;
+      followGround(e.car, this.track, e.idx);
       e.driver = new DriftDriver(e.car, this.track, { skill: e.skill * (difficulty === 'facil' ? 0.85 : 1), lane: slot.lane * 0.6, seed: 97 + i * 31 });
       e.scorer.resetRace();
       e.timer = new LapTimer(this.track, { persist: false });
@@ -108,6 +109,7 @@ export class Rivals {
       const [sf, sr] = carSurfaces(this.track, e.car, e.idx, paramsOf(e.car).a, paramsOf(e.car).b);
       stepCar(e.car, inp, dt, sf, sr);
       e.idx = nearestIndex(this.track, e.car.x, e.car.z, e.idx);
+      followGround(e.car, this.track, e.idx);
       const hit = collideWalls(e.car, this.track, e.idx);
       if (hit) e.wallImpact = Math.max(e.wallImpact, hit.speed);
     }
@@ -154,10 +156,11 @@ export class Rivals {
       const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), lx = fz, lz = -fx, b = paramsOf(c).b;
       for (const side of [0.8, -0.8]) {
         const wx = c.x + lx * side - fx * b, wz = c.z + lz * side - fz * b;
-        skids.add(`r${i}${side}`, wx, wz, lx, lz, amount > 0.3);
+        const wy = (c.y || 0) - Math.sin(c.pitch || 0) * b;
+        skids.add(`r${i}${side}`, wx, wz, lx, lz, amount > 0.3, amount, wy);
         if (amount > 0.25) {
           const count = amount * simDt * 9 * (0.4 + Math.min(1, c.speed / 25));
-          for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(wx, wz, c.vx, c.vz, amount);
+          for (let k = Math.floor(count + Math.random()); k > 0; k--) particles.smoke(wx, wz, c.vx, c.vz, amount, wy);
         }
       }
     });

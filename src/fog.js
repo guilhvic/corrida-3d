@@ -5,7 +5,7 @@ import * as THREE from 'three';
 // uMistColor: cor da névoa rasteira (cada mapa define a sua; a da cidade é mais clara e quente que o céu).
 export const fogUniforms = {
   uFogTime: { value: 0 }, uMistAmount: { value: 1 }, uMistColor: { value: new THREE.Color(0.065, 0.047, 0.065) },
-  uMistDensity: { value: 0.034 }, uMistFalloff: { value: 0.34 },
+  uMistDensity: { value: 0.034 }, uMistFalloff: { value: 0.34 }, uMistBase: { value: 0 }, // uMistBase: altura (m) onde a névoa é mais densa
 };
 
 export const MIST = {
@@ -37,6 +37,7 @@ export function installMist() {
       uniform vec3 uMistColor;
       uniform float uMistDensity;
       uniform float uMistFalloff;
+      uniform float uMistBase;
       varying float vFogDepth;
       varying vec3 vFogWorldPos;
       #ifdef FOG_EXP2
@@ -72,7 +73,7 @@ export function installMist() {
       if (uMistAmount > 0.0) {
       vec3 mistRay = vFogWorldPos - cameraPosition;
       float mistDist = min(length(mistRay), ${MIST.maxDistance.toFixed(1)});
-      float h0 = max(cameraPosition.y, 0.0), h1 = max(vFogWorldPos.y, 0.0), dh = h1 - h0;
+      float h0 = max(cameraPosition.y - uMistBase, 0.0), h1 = max(vFogWorldPos.y - uMistBase, 0.0), dh = h1 - h0;
       float FALLOFF = uMistFalloff;
       float heightTerm = abs(dh) > 0.01
         ? (exp(-FALLOFF * h0) - exp(-FALLOFF * h1)) / (FALLOFF * dh)
@@ -95,6 +96,7 @@ export function installMist() {
     shader.uniforms.uMistColor = fogUniforms.uMistColor;
     shader.uniforms.uMistDensity = fogUniforms.uMistDensity;
     shader.uniforms.uMistFalloff = fogUniforms.uMistFalloff;
+    shader.uniforms.uMistBase = fogUniforms.uMistBase;
   };
 }
 

@@ -1,8 +1,8 @@
 // Pistas e carros disponíveis no menu.
 import { CAR, engineTorque } from './physics.js';
-import { buildTrack, FUJIMI_POINTS } from './track.js';
+import { buildTrack, FUJIMI_POINTS, HAKONE_POINTS } from './track.js';
 
-// world: qual cenário o main.js monta para a pista (world.js = cidade, worldFujimi.js = interior).
+// world: qual cenário o main.js monta para a pista (world.js = cidade, worldFujimi.js = interior, worldHakone.js = serra).
 export const TRACKS = [
   {
     id: 'wangan',
@@ -28,6 +28,19 @@ export const TRACKS = [
       { id: 'manha', name: 'MANHÃ COM NEBLINA', jp: '朝霧', description: 'Neblina densa no vale; o Fuji aparece acima dela.' },
     ],
     build: () => Object.assign(buildTrack(FUJIMI_POINTS), { id: 'fujimi' }),
+  },
+  {
+    id: 'hakone',
+    name: 'SERRA DE HAKONE',
+    jp: '箱根峠',
+    description: 'Descida de serra com sete grampos em sequência, muros de pedra e mata fechada; volta subindo pelo vale.',
+    world: 'hakone',
+    times: [
+      { id: 'neblina', name: 'NEBLINA', jp: '霧', description: 'Céu fechado e neblina subindo do vale: lá embaixo quase não se enxerga.' },
+      { id: 'outono', name: 'OUTONO', jp: '紅葉', description: 'Fim de tarde com os bordos vermelhos e o lago aparecendo no vale.' },
+      { id: 'noite', name: 'NOITE', jp: '夜', description: 'Só os postes de sódio dos grampos e a névoa azulada.' },
+    ],
+    build: () => Object.assign(buildTrack(HAKONE_POINTS), { id: 'hakone' }),
   },
 ];
 

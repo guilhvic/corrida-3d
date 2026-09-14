@@ -84,7 +84,7 @@ export class DriftTrail {
     scene.add(this.mesh);
   }
 
-  // null = cor do multiplicador; [r, g, b] = cor fixa; 'rainbow' = arco-íris girando
+  // null = cor do multiplicador; [r, g, b] = cor fixa; 'rainbow' = arco-íris girando; 'fire' = fogo tremendo; 'aurora' = verde e roxo ondulando
   setColor(color) {
     this.custom = color || null;
   }
@@ -117,6 +117,8 @@ export class DriftTrail {
     }
     this.strength += (target - this.strength) * (1 - Math.exp(-dt * 10));
     if (this.custom === 'rainbow') this.color.setHSL((now * 0.35) % 1, 1, 0.55);
+    else if (this.custom === 'fire') this.color.setRGB(1, 0.28 + 0.3 * Math.abs(Math.sin(now * 23) * Math.sin(now * 7.3)), 0.05);
+    else if (this.custom === 'aurora') this.color.setHSL(0.36 + 0.42 * (0.5 + 0.5 * Math.sin(now * 1.7)), 0.9, 0.55);
     else if (this.custom) this.color.setRGB(...this.custom);
     else multColor(scorer.mult, this.color);
     let flash = 0;
@@ -131,7 +133,8 @@ export class DriftTrail {
     const emit = alpha > 0.03 && car.speed > 2;
     tailLights.forEach(([lx, ly, lz], r) => {
       const pts = this.ribbons[r];
-      const x = car.x + cos * lx + sin * lz, z = car.z - sin * lx + cos * lz, y = ly + 0.03;
+      const x = car.x + cos * lx + sin * lz, z = car.z - sin * lx + cos * lz;
+      const y = (car.y || 0) + ly + 0.03 + Math.sin(car.pitch || 0) * lz; // rampa: lanterna traseira mais baixa subindo
       const last = pts[pts.length - 1];
       if (last && Math.hypot(last.x - x, last.z - z) > 6) pts.length = 0; // carro teleportado (R, grid)
       if (emit) {

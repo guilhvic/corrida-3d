@@ -98,11 +98,11 @@ export class ReplayDirector {
       for (let k = -8; k <= 8; k++) bend += track.curv[(ahead + k + track.N) % track.N];
       const sd = bend > 0 ? -1 : bend < 0 ? 1 : this.side;
       const off = WALL_OFFSET + 2 + Math.random() * 2;
-      this.pos.set(track.x[ahead] + track.nx[ahead] * sd * off, 2.6 + Math.random() * 2.5, track.z[ahead] + track.nz[ahead] * sd * off);
+      this.pos.set(track.x[ahead] + track.nx[ahead] * sd * off, (track.y?.[ahead] ?? 0) + 2.6 + Math.random() * 2.5, track.z[ahead] + track.nz[ahead] * sd * off);
     } else {
-      this.pos.set(car.x, 3, car.z);
+      this.pos.set(car.x, (car.y || 0) + 3, car.z);
     }
-    this.look.set(car.x, 0.8, car.z);
+    this.look.set(car.x, (car.y || 0) + 0.8, car.z);
   }
 
   // car: estado do carro em foco ({ x, z, yaw, vx, vz, speed })
@@ -117,6 +117,7 @@ export class ReplayDirector {
     const mx = Math.sin(move), mz = Math.cos(move);
     const dist = Math.hypot(this.pos.x - car.x, this.pos.z - car.z);
 
+    const gy = car.y || 0; // altura do chão sob o carro (serra)
     let fov = 55, smooth = 1 - Math.exp(-dt * 4);
     const target = new THREE.Vector3();
     if (shot.kind === 'trackside') {
@@ -127,7 +128,7 @@ export class ReplayDirector {
       const toCam = (this.pos.x - car.x) * mx + (this.pos.z - car.z) * mz;
       if ((toCam < -10 && dist > 32) || dist > 90) this.time = shot.max;
     } else if (shot.kind === 'heli') {
-      target.set(car.x - mx * 16 + mz * 7 * this.side, 13, car.z - mz * 16 - mx * 7 * this.side);
+      target.set(car.x - mx * 16 + mz * 7 * this.side, gy + 13, car.z - mz * 16 - mx * 7 * this.side);
       fov = 48;
       smooth = 1 - Math.exp(-dt * 1.5);
     } else if (shot.kind === 'side') {
@@ -136,16 +137,16 @@ export class ReplayDirector {
       const nx = track.nx[this.idx], nz = track.nz[this.idx];
       const sd = lat > 0 ? -1 : 1;
       const slide = Math.sin(this.time * 0.6) * 2.5;
-      target.set(car.x + nx * sd * 4.2 + mx * slide, 0.75, car.z + nz * sd * 4.2 + mz * slide);
+      target.set(car.x + nx * sd * 4.2 + mx * slide, gy + 0.75, car.z + nz * sd * 4.2 + mz * slide);
       fov = 58;
       smooth = 1 - Math.exp(-dt * 6);
     } else if (shot.kind === 'orbit') {
       const a = this.time * 0.55 + (this.side > 0 ? 0 : Math.PI);
-      target.set(car.x + Math.sin(a) * 8.5, 2.3, car.z + Math.cos(a) * 8.5);
+      target.set(car.x + Math.sin(a) * 8.5, gy + 2.3, car.z + Math.cos(a) * 8.5);
       fov = 52;
       smooth = 1 - Math.exp(-dt * 5);
     } else {
-      target.set(car.x + fx * 7.5 + fz * 1.2 * this.side, 1.0, car.z + fz * 7.5 - fx * 1.2 * this.side);
+      target.set(car.x + fx * 7.5 + fz * 1.2 * this.side, gy + 1.0 + Math.tan(car.pitch || 0) * 7.5, car.z + fz * 7.5 - fx * 1.2 * this.side);
       fov = 50;
       smooth = 1 - Math.exp(-dt * 7);
     }
@@ -154,7 +155,7 @@ export class ReplayDirector {
       const j = nearestIndex(track, target.x, target.z, this.idx, 20);
       const lat = lateralOffset(track, j, target.x, target.z);
       const limit = WALL_OFFSET - 0.6;
-      if (target.y < 4 && Math.abs(lat) > limit) {
+      if (target.y - gy < 4 && Math.abs(lat) > limit) {
         const push = (Math.abs(lat) - limit) * Math.sign(lat);
         target.x -= track.nx[j] * push; target.z -= track.nz[j] * push;
       }
@@ -162,7 +163,7 @@ export class ReplayDirector {
     if (this.time < dt * 1.5 || shot.kind === 'trackside') this.pos.copy(target); // corte seco na troca de plano
     else this.pos.lerp(target, smooth);
 
-    this.look.lerp(new THREE.Vector3(car.x + mx * Math.min(3, car.speed * 0.12), 0.75, car.z + mz * Math.min(3, car.speed * 0.12)), this.time < dt * 1.5 ? 1 : 1 - Math.exp(-dt * 8));
+    this.look.lerp(new THREE.Vector3(car.x + mx * Math.min(3, car.speed * 0.12), gy + 0.75, car.z + mz * Math.min(3, car.speed * 0.12)), this.time < dt * 1.5 ? 1 : 1 - Math.exp(-dt * 8));
     camera.position.copy(this.pos);
     camera.lookAt(this.look);
     camera.fov = fov;

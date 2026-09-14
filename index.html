@@ -182,6 +182,7 @@
     body[data-menu="single"] .panel, body[data-menu="single"] #combo, body[data-menu="single"] #popup, body[data-menu="single"] #corner,
     body[data-menu="garage"] .panel, body[data-menu="garage"] #combo, body[data-menu="garage"] #popup, body[data-menu="garage"] #corner,
     body[data-menu="ranking"] .panel, body[data-menu="ranking"] #combo, body[data-menu="ranking"] #popup, body[data-menu="ranking"] #corner,
+    body[data-menu="profile"] .panel, body[data-menu="profile"] #combo, body[data-menu="profile"] #popup, body[data-menu="profile"] #corner,
     body[data-menu="results"] .panel, body[data-menu="results"] #combo, body[data-menu="results"] #popup,
     body[data-menu="controls"] .panel, body[data-menu="controls"] #combo, body[data-menu="controls"] #popup,
     body[data-menu="config"] .panel, body[data-menu="config"] #combo, body[data-menu="config"] #popup, body[data-menu="config"] #corner { visibility: hidden; }
@@ -242,6 +243,7 @@
     .mode-btn.locked.flash { animation: sel-flash .3s steps(2); }
     #menu-pad { margin-top: 4px; text-align: left; }
     .menu-actions.row.tight { margin-top: 0; }
+    [data-screen="config"] .menu-actions.row .menu-btn { min-width: 150px; white-space: nowrap; }
     /* Configurações: grupos em colunas que viram uma só no celular, com rolagem */
     .config-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 18px; max-height: 62vh; overflow-y: auto; padding: 2px; }
     .config-group { display: flex; flex-direction: column; gap: 5px; }
@@ -292,6 +294,50 @@
     .results-grades b small { font-size: 18px; color: var(--muted); margin-left: 2px; }
     .results-grades b[data-grade="SS"] { color: #ff5ad8; } .results-grades b[data-grade="S"] { color: var(--amber); }
     .results-grades b[data-grade="C"], .results-grades b[data-grade="D"] { color: var(--muted); }
+    /* Perfil e medalhas (bronze, prata, ouro; cinza enquanto bloqueada) */
+    .menu-card.profile { max-width: 900px; }
+    .profile-body { max-height: 66vh; overflow-y: auto; padding: 2px 4px 2px 2px; }
+    .profile-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-bottom: 10px; }
+    .profile-title { display: flex; align-items: baseline; gap: 10px; }
+    .profile-title b { font-family: var(--dot); font-weight: normal; font-size: 40px; letter-spacing: 0.1em; color: var(--amber); text-shadow: 0 0 12px rgba(255,177,59,0.7); line-height: 1; }
+    .profile-title .jp { font-size: 20px; color: var(--muted); }
+    .profile-medals { display: flex; gap: 12px; font-family: var(--dot); font-size: 22px; color: var(--text); }
+    .profile-medals span { display: flex; align-items: center; gap: 4px; }
+    .profile-medals .medal { width: 18px; height: 18px; }
+    .profile-head small { width: 100%; color: var(--muted); font-size: 15px; }
+    .profile-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; font-family: var(--dot); }
+    .profile-stats span { display: block; font-size: 14px; color: var(--label); letter-spacing: 0.1em; }
+    .profile-stats b { font-weight: normal; font-size: 26px; color: var(--vfd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+    .profile-stats b.amber { color: var(--amber); }
+    .profile-stats b.small { font-size: 18px; }
+    .profile-stats div.wide { grid-column: span 2; }
+    .profile-stats b small { font-size: 16px; color: var(--muted); }
+    .profile-grades { margin-top: 12px; }
+    .profile-caption { margin-top: 14px; }
+    .medal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
+    .medal-card { display: grid; grid-template-columns: 38px 1fr; gap: 10px; align-items: start; padding: 7px 9px; border-radius: 4px;
+      border: 1px solid rgba(61,255,196,0.14); background: rgba(61,255,196,0.03); }
+    .medal-card b { display: block; font-family: var(--dot); font-weight: normal; font-size: 21px; letter-spacing: 0.06em; color: var(--vfd); line-height: 1.05; }
+    .medal-card small { display: block; font-size: 13px; color: var(--muted); line-height: 1.25; }
+    .medal-card.got { border-color: rgba(255,177,59,0.35); }
+    .medal-card.got b { color: var(--amber); }
+    .medal-card.locked .medal { filter: grayscale(1) brightness(0.55); opacity: 0.6; }
+    .medal-progress { height: 5px; margin: 5px 0 3px; background: rgba(61,255,196,0.1); }
+    .medal-progress i { display: block; height: 100%; background: var(--vfd); box-shadow: 0 0 5px rgba(61,255,196,0.6); }
+    .medal-card.got .medal-progress i { background: var(--amber); box-shadow: 0 0 5px rgba(255,177,59,0.6); }
+    .medal-foot { color: var(--label) !important; }
+    [data-medal="bronze"] { --medal-a: #f0b07a; --medal-b: #8a4f22; }
+    [data-medal="prata"] { --medal-a: #f4f7fa; --medal-b: #7d8791; }
+    [data-medal="ouro"] { --medal-a: #fff0a0; --medal-b: #b8860b; }
+    .medal { display: block; width: 36px; height: 36px; border-radius: 50%; position: relative;
+      background: radial-gradient(circle at 35% 30%, var(--medal-a), var(--medal-b) 70%); box-shadow: inset 0 0 0 3px rgba(0,0,0,0.25), 0 0 10px color-mix(in srgb, var(--medal-a) 40%, transparent); }
+    .medal::after { content: '★'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 55%; color: rgba(0,0,0,0.35); }
+    .results-medals { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+    .results-medals > span { font-family: var(--dot); font-size: 15px; color: var(--label); letter-spacing: 0.1em; }
+    .medal-chip { display: grid; grid-template-columns: 28px auto 1fr; gap: 10px; align-items: center; animation: feed-in .3s steps(3); }
+    .medal-chip .medal { width: 26px; height: 26px; }
+    .medal-chip b { font-family: var(--dot); font-weight: normal; font-size: 22px; color: var(--amber); white-space: nowrap; }
+    .medal-chip small { font-size: 14px; color: var(--muted); }
     /* Replay no fundo do resultado: cartão à esquerda, etiqueta de TV no canto */
     body[data-menu="results"] #menu { place-items: center start; background: linear-gradient(90deg, rgba(3,5,5,0.9) 0%, rgba(3,5,5,0.55) 40%, transparent 68%); }
     body[data-menu="results"] .menu-card { max-width: 600px; }
@@ -434,14 +480,14 @@
         <button type="button" class="menu-btn mode-btn" data-nav data-action="single">
           <b>SINGLEPLAYER</b><small>Corrida contra a IA ou treino livre, recordes locais</small>
         </button>
+        <button type="button" class="menu-btn mode-btn" data-nav data-action="profile">
+          <b>PERFIL</b><small>Estatísticas de piloto, medalhas e itens liberados</small>
+        </button>
         <button type="button" class="menu-btn mode-btn locked" data-nav data-action="multi" aria-disabled="true">
           <b>MULTIPLAYER <em>EM BREVE</em></b><small>Correr com outros jogadores online</small>
         </button>
         <button type="button" class="menu-btn mode-btn" data-nav data-action="config">
-          <b>CONFIGURAÇÕES</b><small>Volumes, vídeo, câmera, unidades e interface</small>
-        </button>
-        <button type="button" class="menu-btn mode-btn" data-nav data-action="controls">
-          <b>CONTROLES</b><small>Teclado, controle Xbox e teste do controle</small>
+          <b>CONFIGURAÇÕES</b><small>Volumes, vídeo, câmera, interface e controles</small>
         </button>
       </div>
       <p class="note" id="menu-pad"></p>
@@ -581,17 +627,24 @@
       <div class="menu-actions"><button type="button" class="menu-btn primary" data-nav data-action="back">VOLTAR</button></div>
     </section>
 
+    <section class="menu-card profile" data-screen="profile" hidden>
+      <div class="menu-title"><h2>PERFIL DO PILOTO</h2><p class="jp">ドライバープロフィール</p></div>
+      <div id="profile-body" class="profile-body"></div>
+      <div class="menu-actions"><button type="button" class="menu-btn primary" data-nav data-action="back">VOLTAR</button></div>
+    </section>
+
     <section class="menu-card medium" data-screen="config" hidden>
       <div class="menu-title"><h2>CONFIGURAÇÕES</h2><p class="jp">設定</p></div>
       <div id="config-body" class="config-body"></div>
       <div class="menu-actions row">
         <button type="button" class="menu-btn primary" data-nav data-action="back">VOLTAR</button>
+        <button type="button" class="menu-btn" data-nav data-action="controls">CONTROLES</button>
         <button type="button" class="menu-btn" data-nav data-action="config-reset">RESTAURAR PADRÕES</button>
       </div>
     </section>
 
     <section class="menu-card medium" data-screen="controls" hidden>
-      <h2>CONTROLES</h2>
+      <div class="menu-title"><h2>CONTROLES</h2><p class="jp">設定 › 操作</p></div>
       <div class="scroll">
         <table id="controls">
           <thead><tr><th></th><th>TECLADO</th><th>CONTROLE XBOX</th></tr></thead>
@@ -628,7 +681,6 @@
         <button type="button" class="menu-btn primary" data-nav data-action="resume">CONTINUAR</button>
         <button type="button" class="menu-btn" data-nav data-action="restart">REINICIAR CORRIDA</button>
         <button type="button" class="menu-btn" data-nav data-action="config">CONFIGURAÇÕES</button>
-        <button type="button" class="menu-btn" data-nav data-action="controls">CONTROLES</button>
         <button type="button" class="menu-btn" data-nav data-action="quit">MENU PRINCIPAL</button>
       </div>
     </section>
