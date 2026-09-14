@@ -1,0 +1,8 @@
+node_modules/
+# Carro personalizado do usuário (ver assets/LEIA-ME.md)
+assets/carro.glb
+assets/carro.json
+# Áudio gerado pelas ferramentas (tools/render-*.js)
+*.wav
+.DS_Store
+Thumbs.db

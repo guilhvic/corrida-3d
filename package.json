@@ -1,0 +1,11 @@
+{
+  "name": "corrida-3d",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Simulador de corrida 3D no navegador (three.js, fisica propria).",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/sim.js"
+  }
+}

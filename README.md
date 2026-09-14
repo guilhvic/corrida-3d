@@ -1,0 +1,122 @@
+# Corrida 3D · Drift Noturno
+
+Jogo de drift de rua no navegador: circuito de quarteirões (~860 m) numa cidade japonesa à noite (todos os textos do cenário em japonês), visual de PS2 tardio
+(cena em 540 linhas esticada, bloom, rastro de movimento, luz pintada no chão) e coupé japonês dos anos 90.
+three.js para renderização, física de veículo e colisão próprias.
+
+```bash
+npm start      # http://localhost:4400
+npm test       # testes headless: drift, paredes, pontuação, voltas, pilotagem de teclado, IA
+```
+
+Sem build e sem dependências npm: o three.js vem do CDN via import map (`index.html`).
+
+## Corrida
+
+A tela inicial tem **SINGLEPLAYER**, **MULTIPLAYER** (em breve), **CONFIGURAÇÕES** e **CONTROLES**. Configurações (também na pausa, salvas no navegador, `src/settings.js`): volumes geral, música, motor, rivais e efeitos, trilha liga/desliga; resolução interna (360 a nativa), CRT, névoa, rastro de movimento, campo de visão, contador de FPS; câmera e câmbio ao largar, km/h ou mph, vibração do controle, fantasma, notas de estilo, rastro de drift, nomes dos rivais e minimapa. As teclas N, V, G e K mudam as mesmas opções. O singleplayer escolhe pista, horário/clima, carro, número de voltas (1, 2, 3, 5, 10 ou treino livre), grid e dificuldade, e dá acesso à **GARAGEM** e ao **RANKING**; tudo navegável com mouse, setas/Enter ou D-pad/A/B. A corrida começa com contagem regressiva no grid, logo depois da linha, já na volta 1. Ao cruzar a chegada da última volta o combo em andamento é somado e aparece o resultado: pontos e tempo por volta, maior combo e recorde por configuração (salvo no navegador). Atrás do resultado roda o **replay da corrida** em loop, com todos os carros, fumaça e rastro de drift, cortado por um diretor de TV entre câmera de beira de pista com zoom, helicóptero, lateral baixa, órbita e frontal (`src/replay.js`; grava 30 quadros por segundo durante a corrida). `Esc` pausa (continuar, reiniciar, controles, menu principal). Pistas e carros ficam em `src/catalog.js`.
+
+**Rivais de IA (GRID: 1 a 8 corredores):** até 7 pilotos de IA largam à frente do jogador e disputam os mesmos pontos de drift. A classificação ao vivo (por pontos) fica à esquerda, com a posição no painel de voltas; o resultado mostra a colocação final (quem ainda não terminou entra com o que tinha quando você cruzou a chegada). Os carros colidem entre si: batida acima de 2 m/s zera o combo, encostar não. A IA (`src/ai.js`) pilota com o controle de ângulo do nível Fácil: esterça para a direção da velocidade seguir a pista, planeja a frenagem pela curvatura, faz as curvas de lado, desvia e segura distância de quem está à frente e dá ré se encalhar. No nível Fácil os rivais correm com habilidade reduzida. Para testar a IA sem navegador: `node tools/ai-lab.js 7 3` (rivais, voltas); os parâmetros também estão no painel de debug (B).
+
+## Pistas
+
+| Pista | Cenário | Traçado |
+|---|---|---|
+| CIRCUITO DO PORTO (湾岸ループ) | Zona portuária à noite: asfalto molhado, prédios, neon, muretas de concreto | ~860 m, quarteirões com esquinas de 90° |
+| ESTRADA DE FUJIMI (富士見街道) | Interior do Japão no fim de tarde: Monte Fuji ao fundo, arrozais alagados, vila com telhados de cerâmica, loja de conveniência, santuário com torii, morros com cedros, ferrovia com trem local, guard-rails | ~1,3 km: reta longa entre arrozais, curvas pela vila, grampo no morro, "S" na descida e reta ao lado da ferrovia |
+
+**Horário e clima** (seletor HORÁRIO): no porto, *noite* ou *noite chuvosa* (chuva desenhada na GPU com riscos de borda suave, respingos no chão e cortinas de chuva ao longe que apagam o horizonte de prédios; asfalto espelhado, névoa mais fechada, chiado de chuva, spray das rodas e 80% da aderência para todos, IA incluída, que entra nas curvas com mais cautela); em Fujimi, *fim de tarde*, *noite* (lua ao lado do Fuji, estrelas, postes pela estrada e lanternas de festival na vila) ou *manhã com neblina* (névoa densa no vale e o Fuji saindo de dentro dela). Os temas do Fujimi ficam em `FUJIMI_THEMES`.
+
+Os cenários das duas pistas são montados uma vez, durante a tela de carregamento inicial (cerca de 1,3 s a mais, já desenhando cada horário para subir texturas e compilar shaders), e ficam em memória: trocar de pista só esconde um e mostra o outro, e trocar de horário ou clima só muda luz, céu, neblina e efeitos (`setTime` em cada mundo). As duas trocas são praticamente instantâneas. O Fuji e as cordilheiras acompanham a câmera como um cenário distante; o relevo, as árvores e os arrozais são gerados com semente fixa (`src/worldFujimi.js`). Para testar a IA na pista nova: `TRACK=fujimi node tools/ai-lab.js 7 3`.
+
+## Carros
+
+Três carros no menu, cada um com modelo 3D e acerto próprios (`src/catalog.js`; o que não é sobrescrito vem de `CAR`):
+
+| Carro | Inspiração | Modelo | Acerto |
+|---|---|---|---|
+| KAZE 180 TURBO | 180SX | fastback, faróis escamoteáveis, aro de 6 raios | 1250 kg, entre-eixos 2,70 m, o acerto base |
+| SEIRAN S15 SPEC-R | Silvia S15 | três volumes, faróis fixos repuxados colados na lataria, lanternas trapezoidais, aerofólio no porta-malas, aro de 5 raios | 1240 kg, +10% de torque, corte a 8.000 rpm, entre-eixos 2,53 m |
+| TSUBAME NA ROADSTER | MX-5 NA | roadster de cockpit aberto (recorte na lataria), para-brisa, santantônio, capota recolhida, faróis escamoteáveis pequenos, aro "daisy" | 1010 kg, ~60% do torque, entre-eixos 2,27 m, CG mais baixo |
+
+Cada carro tem o próprio som de motor: KAZE 180 com 4 cilindros turbo, SEIRAN com swap de 6 em linha turbo e TSUBAME com swap de rotativo de 2 rotores. Os rivais usam os três carros (e os três motores).
+
+**Garagem:** pintura (12 cores), rodas (6 raios, 5 raios, malha, 8 raios finos, disco) e cor das rodas, aerofólio (original, sem, GT alto, ducktail), rebaixamento até 6 cm, adesivo de porta em japonês (峠最速, 湾岸ドリフト, 走り屋, 風, ドリフト魂, patrocínio ゼータタイヤ) e cor do rastro de drift (multiplicador, cor fixa ou arco-íris). Salvo por carro (`src/garage.js`); o carro gira ao lado das opções.
+
+**Danos:** batidas amassam para-choques e laterais e raspar a mureta risca a pintura do lado que encostou (deformação e riscos no shader dos materiais do carro). Zera a cada corrida. Os modelos saem de `src/carDesigns.js` (seções da lataria, estufa ou cockpit e as peças de cada carro) montados por `src/carModel.js` e `src/carShell.js`.
+
+A corrida larga na reta logo depois da linha e já começa na volta 1 (a reta antes da linha é curta demais para um grid de 8).
+
+## Controles extras
+
+- **Ré:** parado, segure o freio (S / LT) em qualquer câmbio; ela vai até ~40 km/h. Acelerar de ré freia e engata a 1ª.
+- **Câmera 360°:** analógico direito (ou arrastar o mouse) gira em volta do carro e sobe/desce; volta para trás do carro 1,5 s depois de soltar.
+
+## Painel de debug (tecla B)
+
+Abre por cima do jogo sem pausar (arraste pelo título). Mostra ao vivo velocidade, ângulo de drift, guinada, esterço, deriva, carga, forças e uso de aderência de cada eixo, giro/torque, arrasto, torque das assistências, entradas e FPS, com círculo de atrito e gráfico dos últimos 6 s.
+
+Embaixo, todos os parâmetros de `CAR` (gravidade, massa, pneus, motor, freios, direção, assistências, modo Fácil), aderência dos pisos, paredes e pontuação, com velocidade do tempo (câmera lenta). Valores alterados ficam em âmbar e salvos no navegador; **exportar / importar** mostra o acerto em JSON para copiar para `src/physics.js` ou colar de volta.
+
+**Câmera livre** (botão no painel ou tecla `F`): congela a corrida, esconde HUD e menus e deixa voar pelo mapa. WASD/setas movem, arrastar o mouse gira, Espaço/E sobe, C/Q desce, Shift acelera, Ctrl vai devagar, a roda do mouse muda a velocidade; no controle, analógicos e RT/LT. `F` ou `Esc` volta para onde estava (`src/freeCam.js`). O Fuji e as cordilheiras são cenário de fundo pensado para a vista da estrada: vistos do alto, aparecem como silhuetas.
+
+## Som do motor
+
+Sintetizado em `src/engine-dsp.js` (pulsos de combustão, ressonância do escapamento, admissão, turbo, válvula de alívio e estalos) e tocado num AudioWorklet (`src/engine-worklet.js`). Perfis em `ENGINE_PROFILES`: **4 cilindros turbo** (4 pulsos por ciclo, cilindros levemente desiguais), **6 em linha turbo** (6 pulsos, mais liso e grave, turbo mais cheio) e **rotativo** (janela de escape longa que dá o zumbido áspero, marcha lenta irregular "brap brap", sem turbo e com mais estalos). Para ouvir fora do jogo: `node tools/render-engine.js motor.wav [i4t|i6t|rotary]`.
+
+## Música
+
+Trilha **eurobeat original e procedural** (`src/music-dsp.js`, tocada num AudioWorklet): 6 músicas, cada uma gerada de uma semente com tom, andamento (154 a 161 BPM), progressões, melodia do refrão, arpejo e timbre do lead próprios. Cada uma tem intro, verso, pré-refrão com virada e subida, refrão, break sem bumbo, refrão de novo e último refrão modulado um tom acima (~3 min), e depois passa para a próxima. Bumbo quatro por tempo com "pumping", prato aberto no contratempo, baixo em oitavas, acordes de supersaw, arpejo e lead com glide, delay e reverb. Na corrida toca cheia; no menu, na pausa e no resultado fica abafada (efeitos calam, música continua). `K` liga/desliga (fica salvo), `L` pula para a próxima. Para ouvir fora do jogo: `node tools/render-music.js musica.wav [0-5] [segundos] [compasso inicial]`.
+
+## Dificuldade
+
+Escolha no menu, com `H` ou com o botão X do controle (fica salva no navegador).
+
+- **Fácil** (padrão): esterço todo + acelerador acima de 36 km/h entra de lado; o ângulo segue o esterço (até ~40°) e é mantido pelo jogo, com um leve empurrão para não perder embalo. Soltar o esterço endireita; sem acelerador a curva fica na aderência.
+- **Normal**: contra-esterço automático e anti-rodada; o ângulo depende de dosar acelerador e esterço.
+- **Simulação**: sem assistências.
+
+Em todas, bater na mureta ou rodar zera o combo.
+
+## Como pontua
+
+- Drift conta a partir de 12° de ângulo e 25 km/h. Pontos por segundo crescem com ângulo (até 70°) e velocidade.
+- A cada 3 s de drift contínuo o multiplicador sobe +0,5 (até x5). Trocar de lado sem perder o drift (transição) também dá +0,5.
+- Bônus: ângulo alto (>45° por 1 s), drift longo (8 s), rente à parede (<1,5 m, pontos x1,5).
+- Ficar 1,1 s sem driftar fecha o combo e soma no total. Bater na mureta ou rodar zera o combo.
+- **Nota de estilo por curva:** no fim de cada curva o juiz dá uma nota de D a SS pelo ângulo médio, pela linha (por fora na entrada, rente à parte de dentro no ápice, abrindo na saída) e pela fumaça. SS/S/A/B rendem +1200/700/350/150 pontos (dentro do combo, se ele estiver valendo); bater na curva dá X. O resultado mostra quantas notas de cada tipo (`src/styleJudge.js`; limites no painel de debug).
+- **Ranking de voltas** por pista e carro: as 10 voltas de mais pontos ficam salvas com o fantasma de cada uma. Na tela RANKING dá para escolher contra qual fantasma correr (ou nenhum); por padrão é o 1º (`src/ranking.js`).
+- Enquanto o combo vale, as lanternas deixam um rastro de luz com a cor do multiplicador (verde no x1, âmbar, vermelho, rosa no x5), que esmaece na folga, dá um clarão dourado ao somar e um vermelho ao perder (`src/driftTrail.js`).
+
+## Estrutura
+
+| Arquivo | O que faz |
+|---|---|
+| `src/physics.js` | Carro: pneus (Pacejka), círculo de atrito, transferência de carga, motor, câmbio, freios. Acerto de drift e assistências (contra-esterço, anti-rodada, TC, ABS) em `CAR`. |
+| `src/difficulty.js` | Níveis Fácil/Normal/Simulação (combinações de assistências). |
+| `src/walls.js` | Colisão com as paredes: impulso de corpo rígido com restituição e atrito. |
+| `src/drift.js` | Regras de pontuação (combo, multiplicador, bônus, perdas). |
+| `src/track.js` | Circuito de rua (spline Catmull-Rom fechada, ~860 m), superfícies (asfalto/calçada) e posição das muretas. |
+| `src/laps.js`, `src/ranking.js` | Voltas e trajetória de cada volta; ranking das 10 melhores por pista e carro com fantasma (localStorage). |
+| `src/styleJudge.js` | Detecção das curvas pela curvatura e nota de estilo (ângulo, linha, fumaça). |
+| `src/garage.js` | Opções visuais da garagem por carro. |
+| `src/rain.js` | Chuva em volta da câmera, toda na GPU: riscos expandidos em espaço de tela, respingos e cortinas de névoa ao longe. |
+| `src/replay.js` | Gravação da corrida e diretor de câmeras do replay. |
+| `src/driftTrail.js`, `src/freeCam.js` | Rastro de luz do drift e câmera livre do debug. |
+| `src/input.js` | Teclado e controle Xbox/PlayStation (gatilhos analógicos, vibração). |
+| `src/worldFujimi.js` | Estrada de Fujimi: céu de fim de tarde, Monte Fuji e cordilheiras, relevo, arrozais, vila, santuário, ferrovia e trem, guard-rails, placas. |
+| `src/world.js` | Cidade: asfalto molhado, calçadas, muretas, prédios com lojas e janelas acesas, neon, postes, fiação, semáforos. |
+| `src/carModel.js`, `src/carDesigns.js`, `src/carShell.js` | Modelos dos carros: partes comuns (interior, rodas, luzes), designs de cada carro e a lataria por seções com recorte de caixas de roda e cockpit. Opcional: `assets/carro.glb` (ver `assets/LEIA-ME.md`). |
+| `src/neon.js` | Bairro noturno: placas verticais salientes (atlas numa malha só), tubos de neon 3D com sequência e tremulação, contornos nos telhados, lâmpadas de marquise, lanternas de papel, telões de LED e poças de luz colorida. |
+| `src/textures.js` | Texturas procedurais pixel a pixel (asfalto com poças, rachaduras, bueiro e faixas gastas; blocos de calçada; guia; marcas de pneu; pintura 止まれ; piso tátil) com normal map e mapa especular. |
+| `src/fog.js` | Névoa rasteira 3D (densidade por altura integrada no raio + ruído que se move) injetada nos shaders de neblina do three.js, e cones de luz aditivos dos postes e faróis. Tecla N liga/desliga. |
+| `src/ps2.js` | Pós-processamento: cena em 540 linhas, bloom, rastro e pontilhado; passada final em resolução da tela com efeito CRT (scanlines leves, grade de fósforo, curvatura, aberração cromática; tecla V). |
+| `src/ai.js`, `src/rivals.js`, `src/traffic.js`, `src/race.js` | Piloto de IA de drift, rivais no jogo (modelo, nome, pontos, voltas), colisão entre carros e grid de largada. |
+| `src/menu.js`, `src/catalog.js` | Menus (inicial, singleplayer, controles, pausa, resultado) e lista de pistas/carros/voltas. |
+| `src/debug.js` | Painel de debug (B): telemetria, gráficos e ajuste fino dos parâmetros com persistência e exportação em JSON. |
+| `src/hud.js`, `src/segments.js` | HUD estilo painel eletrônico anos 80-90 (VFD): dígitos de 7 segmentos em SVG, conta-giros em barras, luzes de aviso. |
+| `src/particles.js`, `src/skids.js` | Fumaça/faíscas e marcas de pneu. |
+| `src/audio.js`, `src/bot.js` | Som (efeitos e música em barramentos separados) e piloto automático dos testes. |
+| `src/music-dsp.js`, `src/music-worklet.js` | Eurobeat procedural: composição (progressões, melodia por motivo, estrutura) e síntese (bateria, baixo, supersaw, arpejo, lead, delay, reverb). |
+
+A física roda em passo fixo de 240 Hz, separada da taxa de quadros.
+No console do navegador, `game.CAR` permite ajustar o acerto ao vivo (ex.: `game.CAR.counterSteer = 0.7`).
