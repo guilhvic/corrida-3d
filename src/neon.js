@@ -125,10 +125,10 @@ export function buildNeonDistrict(scene, { rand, fronts, billboards, jpFont, glo
         const variant = variants[Math.floor(rand() * variants.length)];
         const { key, lightbox, height } = variant;
         const group = !lightbox && rand() < 0.25 ? (rand() < 0.5 ? 'blinkA' : 'blinkB') : 'steady';
-        tateBox(variant, frontMatrix(f, along, y + height / 2, 1.0), group);
+        tateBox(variant, frontMatrix(f, along, y + height / 2, 1.0 + (f.balcony ? 1.25 : 0)), group);
         // suporte até a parede
         const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.25), frameMat);
-        arm.applyMatrix4(frontMatrix(f, along, y + height - 0.2, 0.1));
+        arm.applyMatrix4(frontMatrix(f, along, y + height - 0.2, 0.1 + (f.balcony ? 1.25 : 0)));
         scene.add(arm);
         pools.push({ m: frontMatrix(f, along, 0.03, 1.6), key: lightbox ? 'white' : key, size: 3.2 });
         y += height + 0.4 + rand() * 1.0;
@@ -138,7 +138,7 @@ export function buildNeonDistrict(scene, { rand, fronts, billboards, jpFont, glo
     // Contorno de neon na borda do telhado
     if (rand() < 0.4) {
       const key = pickColor();
-      const m = frontMatrix(f, 0, f.h + 0.95, 0.06);
+      const m = frontMatrix(f, 0, f.h + 1.1, 0.26);
       const segs = Math.max(2, Math.round(f.w / 2.5));
       const chase = rand() < 0.4;
       for (let i = 0; i < segs; i++) {
@@ -152,7 +152,7 @@ export function buildNeonDistrict(scene, { rand, fronts, billboards, jpFont, glo
       const key = pickColor();
       const kind = Math.floor(rand() * 4);
       const y0 = 3.9 + Math.floor(rand() * Math.max(1, (f.h - 6) / 3.4)) * 3.4;
-      const m = frontMatrix(f, 0, y0, 0.14);
+      const m = frontMatrix(f, 0, y0, 0.14 + (f.balcony ? 1.25 : 0));
       const width = Math.min(f.w - 2.5, 4 + rand() * 5);
       if (kind === 0) {
         const hh = 0.9 + rand() * 0.8;
@@ -188,7 +188,7 @@ export function buildNeonDistrict(scene, { rand, fronts, billboards, jpFont, glo
         const t = count === 1 ? 0.5 : i / (count - 1);
         const along = -span / 2 + t * span;
         const sag = Math.sin(Math.PI * t) * 0.35;
-        const p = new THREE.Vector3().setFromMatrixPosition(frontMatrix(f, along, 3.45 - sag, 0.55));
+        const p = new THREE.Vector3().setFromMatrixPosition(frontMatrix(f, along, 2.9 - sag, 0.8));
         lanterns.push(p);
         wire.push(new THREE.Vector3(p.x, p.y + 0.33, p.z));
       }

@@ -147,7 +147,15 @@ canvas.addEventListener('pointerup', () => { drag = null; });
 canvas.addEventListener('wheel', (e) => { orbit.dist = THREE.MathUtils.clamp(orbit.dist * (1 + Math.sign(e.deltaY) * 0.1), 1, 30); });
 addEventListener('keydown', (e) => { if (e.key === 'p' || e.key === 'P') usePs2 = !usePs2; });
 
+// Câmera livre relativa ao carro: studio.free = { pos: [lateral, altura, frente], look: [lateral, altura, frente] }
 function placeCamera() {
+  if (window.studio?.free) {
+    const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
+    const at = ([l, y, f]) => [car.x + fz * l + fx * f, car.y + y, car.z - fx * l + fz * f];
+    camera.position.set(...at(window.studio.free.pos));
+    camera.lookAt(...at(window.studio.free.look));
+    return;
+  }
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
   const cx = car.x + fx * orbit.offZ, cz = car.z + fz * orbit.offZ;
   const a = THREE.MathUtils.degToRad(orbit.az) + car.yaw, e = THREE.MathUtils.degToRad(orbit.el);

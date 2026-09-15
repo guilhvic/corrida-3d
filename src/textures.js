@@ -1,7 +1,7 @@
 // Texturas procedurais de superfície geradas pixel a pixel, com cor, relevo (normal map) e brilho coerentes.
 import * as THREE from 'three';
 
-function mulberry32(seed) {
+export function mulberry32(seed) {
   return () => {
     seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
     let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
@@ -13,7 +13,7 @@ function mulberry32(seed) {
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 // Ruído de valor com repetição (tileable) e interpolação suave.
-function valueNoise(rand, gw, gh) {
+export function valueNoise(rand, gw, gh) {
   const g = new Float32Array(gw * gh).map(() => rand());
   return (u, v) => {
     const x = (((u % 1) + 1) % 1) * gw, y = (((v % 1) + 1) % 1) * gh;
@@ -27,7 +27,7 @@ function valueNoise(rand, gw, gh) {
 }
 
 // Superfície em buffers: cor (0..1), altura e brilho; vira texturas no final.
-class Surface {
+export class Surface {
   constructor(w, h) {
     this.w = w; this.h = h;
     this.col = new Float32Array(w * h * 3);
