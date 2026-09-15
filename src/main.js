@@ -15,7 +15,9 @@ import { SkidMarks } from './skids.js';
 import { Particles } from './particles.js';
 import { DriftTrail } from './driftTrail.js';
 import { StyleJudge } from './styleJudge.js';
-import { ReplayRecorder, ReplayDirector } from './replay.js';
+import { ReplayRecorder, ReplayDirector, IntroDirector } from './replay.js';
+import { Announcer } from './announcer.js';
+import { DriftDriver } from './ai.js';
 import { loadGarage, garageLook } from './garage.js';
 import { loadRanking, submitLap, pickGhost, unpackGhost } from './ranking.js';
 import { ProfileTracker } from './profile.js';
@@ -29,6 +31,11 @@ import { Menu, savedSettings, RANDOM } from './menu.js';
 import { carById, trackById, timeOf, TRACKS } from './catalog.js';
 import { Rivals } from './rivals.js';
 import { gridSlot, MAX_RACERS } from './race.js';
+import { t, setLang, getLang, onLangChange } from './i18n.js';
+import { loadConfig } from './settings.js';
+
+// Idioma antes de qualquer texto aparecer (tela de carregamento incluída)
+setLang(loadConfig().lang);
 
 // Antes de qualquer material ser compilado.
 installMist();
@@ -122,9 +129,9 @@ const loadingEl = document.getElementById('loading');
 let loadingChain = Promise.resolve();
 function showLoading(trackDef, time) {
   loadingEl.querySelector('.load-jp').textContent = trackDef ? `${trackDef.jp} · ${time?.jp ?? ''}` : '湾岸ドリフト';
-  loadingEl.querySelector('.load-name').textContent = trackDef ? trackDef.name : 'CORRIDA 3D';
-  loadingEl.querySelector('.load-time').textContent = time ? time.name : '';
-  loadingEl.querySelector('.load-tip').textContent = `Dica: ${LOADING_TIPS[Math.floor(Math.random() * LOADING_TIPS.length)]}`;
+  loadingEl.querySelector('.load-name').textContent = trackDef ? t(trackDef.name) : 'CORRIDA 3D';
+  loadingEl.querySelector('.load-time').textContent = time ? t(time.name) : '';
+  loadingEl.querySelector('.load-tip').textContent = t('Dica: {tip}', { tip: t(LOADING_TIPS[Math.floor(Math.random() * LOADING_TIPS.length)]) });
   loadingEl.hidden = false;
 }
 // Mostra a tela, espera ela ser pintada (2 quadros) e só então roda o trabalho pesado. Chamadas seguidas entram em fila.
@@ -169,8 +176,9 @@ const raceAchievements = [];
 function announceAchievements() {
   for (const a of profile.checkAchievements()) {
     raceAchievements.push(a);
+    announcer.say('medal', { priority: 0 });
     const reward = rewardOf(a.id);
-    hud.toast(`Medalha ${a.medal}: ${a.name}${reward ? ` · libera ${reward.slotName}` : ''}`, 'best', 3600);
+    hud.toast(`${t('Medalha {medal}: {name}', { medal: t(a.medal), name: a.name })}${reward ? ` · ${t('libera {slot}', { slot: reward.slotName })}` : ''}`, 'best', 3600);
   }
 }
 let carModel = null;
@@ -330,10 +338,11 @@ function updateReplay(dt) {
     // O carro em foco aparece à direita do cartão de resultado
     if (innerWidth > 720) { camera.setViewOffset(innerWidth, innerHeight, -innerWidth * 0.22, 0, innerWidth, innerHeight); camera.updateProjectionMatrix(); }
   }
-  replayTag.dataset.camera = director.name;
+  replayTag.dataset.camera = t(director.name);
 }
 const hud = new Hud(track);
 const audio = new CarAudio();
+const announcer = new Announcer();
 // Música começa na primeira interação (o navegador só libera o áudio depois de um gesto)
 const unlockAudio = () => { audio.start(); if (audio.ctx) audio.suspend(race.phase === 'menu' || paused); };
 addEventListener('pointerdown', unlockAudio, { once: true });
@@ -342,8 +351,8 @@ audio.onSong = (song) => hud.toast(`♪ ${song.name} · ${song.bpm} BPM`, 'info'
 audio.setRain(!!world.atmosphere.rain);
 let padName = null;
 const input = new Input({
-  onPadConnected: (name) => { padName = name; hud.toast(`${name} conectado`, 'info', 1800); },
-  onPadDisconnected: (name) => { padName = null; hud.toast(`${name} desconectado`, 'bad', 1800); if (!paused) pauseGame(); },
+  onPadConnected: (name) => { padName = name; hud.toast(t('{name} conectado', { name: t(name) }), 'info', 1800); },
+  onPadDisconnected: (name) => { padName = null; hud.toast(t('{name} desconectado', { name: t(name) }), 'bad', 1800); if (!paused) pauseGame(); },
 });
 // O navegador só entrega o controle à janela focada.
 addEventListener('pointerdown', () => window.focus());
@@ -489,7 +498,7 @@ function placeOnGrid() {
 }
 
 function playerRow() {
-  return { name: 'VOCÊ', css: PLAYER_CSS, points: scorer.total + scorer.comboValue, lap: timer.lap, player: true, finished: race.phase === 'finished' };
+  return { name: t('VOCÊ'), css: PLAYER_CSS, points: scorer.total + scorer.comboValue, lap: timer.lap, player: true, finished: race.phase === 'finished' };
 }
 
 // Fantasma e melhor volta vêm do ranking da pista + carro atuais (a escolha fica nas configurações do menu).
@@ -542,16 +551,43 @@ function beginRace(settings) {
   if (profile.race) profile.abandon();
   profile.startRace({ track: trackId, time: timeId, car: playerCarId, laps: race.laps, racers: race.racers, difficulty });
   raceAchievements.length = 0;
-  race.phase = 'countdown';
-  race.countdown = 3;
   menu.hide();
+  // Sobrevoo de TV antes da contagem (não no reinício)
+  if (config.intro && !settings.restart) startIntro();
+  else startCountdown();
   paused = false;
   audio.start();
   audio.suspend(false);
 }
 
+// --- Sobrevoo antes da largada --------------------------------------------------------------------------------
+let intro = null;
+const introTag = document.getElementById('intro-tag');
+function startIntro() {
+  race.phase = 'intro';
+  intro = new IntroDirector(track, gridSlot(track, Math.floor(Math.max(0, race.racers - 1) / 2)).idx);
+  const def = trackById(trackId), time = timeOf(def, timeId);
+  introTag.querySelector('.intro-jp').textContent = `${def.jp} · ${time.jp}`;
+  introTag.querySelector('.intro-name').textContent = t(def.name);
+  introTag.querySelector('.intro-time').textContent = t(time.name);
+  introTag.hidden = false;
+  document.body.classList.add('intro');
+  announcer.say('welcome', { priority: 1, params: { track: def.jp } });
+}
+
+function startCountdown() {
+  intro = null;
+  introTag.hidden = true;
+  document.body.classList.remove('intro');
+  race.phase = 'countdown';
+  race.countdown = 3;
+  race.countShown = 0;
+  camYaw = car.yaw;
+}
+
 function pauseGame() {
   if (race.phase === 'menu' || paused) return;
+  announcer.stop();
   paused = true;
   const standings = rivals.standings(playerRow());
   menu.showPause({
@@ -570,6 +606,8 @@ function resumeGame() {
 
 function quitToMenu() {
   if (profile.race) profile.abandon();
+  if (race.phase === 'intro') startCountdown();
+  announcer.stop();
   race.phase = 'menu';
   resetRaceState();
   paused = true;
@@ -580,7 +618,9 @@ function quitToMenu() {
 function finishRace() {
   race.phase = 'finished';
   race.finishTimer = 3;
-  hud.popup('CHEGADA', 'bank');
+  hud.popup(t('CHEGADA'), 'bank');
+  const standings = rivals.standings({ ...playerRow(), points: scorer.total, finished: true });
+  announcer.say(standings.length > 1 && standings[0].player ? 'win' : 'finish', { priority: 2, cooldown: 0 });
 }
 
 function showResults() {
@@ -607,13 +647,18 @@ function updateRace(dt) {
     return;
   }
   if (paused) return;
+  if (race.phase === 'intro' && intro?.done) startCountdown();
   if (race.phase === 'countdown') {
     race.countdown -= dt;
-    if (race.countdown > 0) hud.countdown(String(Math.ceil(race.countdown)));
-    else {
+    const n = Math.ceil(race.countdown);
+    if (race.countdown > 0) {
+      hud.countdown(String(n));
+      if (n !== race.countShown) { race.countShown = n; announcer.say(['one', 'two', 'three'][n - 1] ?? 'three', { priority: 2, cooldown: 0 }); }
+    } else {
       race.phase = 'running';
       race.goTimer = 0.9;
-      hud.countdown('JÁ!');
+      hud.countdown(t('JÁ!'));
+      announcer.say('go', { priority: 2, cooldown: 0 });
     }
   }
   if (race.goTimer > 0) {
@@ -632,7 +677,7 @@ function setDifficulty(key, announce = false) {
   applyDifficulty(car, key);
   saveDifficulty(key);
   menu.setDifficulty(key);
-  if (announce) hud.toast(`Dificuldade: ${DIFFICULTIES[key].label}`, 'info', 1600);
+  if (announce) hud.toast(t('Dificuldade: {level}', { level: t(DIFFICULTIES[key].label) }), 'info', 1600);
 }
 
 const menu = new Menu({
@@ -640,7 +685,7 @@ const menu = new Menu({
   onStart: startRace,
   onResume: resumeGame,
   // Reiniciar repete a pista e o horário que saíram no sorteio; "correr de novo" no resultado sorteia outra vez
-  onRestart: () => startRace({ laps: race.laps, racers: race.racers, car: playerCarId, track: trackId, time: timeId }),
+  onRestart: () => startRace({ laps: race.laps, racers: race.racers, car: playerCarId, track: trackId, time: timeId, restart: true }),
   // Na tela inicial o grid mostra quantos vão correr.
   onSettings: (settings) => {
     if (race.phase !== 'menu') return;
@@ -675,6 +720,9 @@ function applyConfig(cfg) {
   const resolutionChanged = pipeline.targetHeight !== cfg.resolution;
   config = cfg;
   audio.setVolumes(cfg);
+  announcer.volume = cfg.narrator * cfg.master;
+  announcer.enabled = cfg.narrator > 0;
+  if (getLang() !== cfg.lang) setLang(cfg.lang);
   if (audio.musicOn !== cfg.musicOn) audio.setMusicOn(cfg.musicOn);
   pipeline.crt = cfg.crt;
   if (mistOn !== cfg.mist) { mistOn = cfg.mist; applyAtmosphere(); }
@@ -685,6 +733,21 @@ function applyConfig(cfg) {
   driftTrail.enabled = cfg.driftTrail;
   rivals.showNames = cfg.names;
 }
+// Troca de idioma: menus e textos gerados de novo (o HTML fixo é traduzido pelo i18n.js)
+onLangChange(() => {
+  if (menu.visible) menu.render();
+  updateNarratorNote();
+  hud.standings(race.phase === 'menu' ? [] : rivals.standings(playerRow()));
+});
+
+// Aviso nas configurações quando o sistema não tem voz japonesa para o narrador
+const narratorNote = document.getElementById('narrator-note');
+function updateNarratorNote() {
+  narratorNote.hidden = announcer.available;
+  narratorNote.textContent = t('Narrador sem voz: o sistema não tem voz japonesa instalada. No Windows: Configurações › Hora e idioma › Fala › Adicionar vozes › Japonês.');
+}
+announcer.onVoices = updateNarratorNote;
+updateNarratorNote();
 applyConfig(config);
 setDifficulty(difficulty);
 race.racers = menu.settings.racers;
@@ -695,7 +758,7 @@ menu.show('main');
 // --- Debug (tecla B) ------------------------------------------------------------------------------
 const debug = new DebugPanel(car);
 const debugInfo = { input: null, surfaces: null, fps: 60, scorer };
-if (debug.loadedCount) hud.toast(`Acerto de debug carregado (${debug.loadedCount} ajuste${debug.loadedCount > 1 ? 's' : ''})`, 'info', 2600);
+if (debug.loadedCount) hud.toast(t(debug.loadedCount > 1 ? 'Acerto de debug carregado ({n} ajustes)' : 'Acerto de debug carregado ({n} ajuste)', { n: debug.loadedCount }), 'info', 2600);
 
 // --- Câmera livre (F ou botão no debug): corrida congelada, menus e HUD escondidos ----------------------
 const freeCam = new FreeCamera(camera, canvas, input);
@@ -733,7 +796,7 @@ function handleActions() {
   if (a.music) {
     audio.start();
     menu.setConfig({ musicOn: !config.musicOn });
-    hud.toast(audio.musicOn ? `Música ligada${audio.song ? ` · ♪ ${audio.song.name}` : ''}` : 'Música desligada', 'info', 1800);
+    hud.toast(audio.musicOn ? `${t('Música ligada')}${audio.song ? ` · ♪ ${audio.song.name}` : ''}` : t('Música desligada'), 'info', 1800);
   }
   if (a.nextSong) { audio.start(); audio.nextSong(); }
   if (a.freeCam) toggleFreeCam();
@@ -743,33 +806,34 @@ function handleActions() {
   }
   if (a.difficulty) setDifficulty(DIFFICULTY_ORDER[(DIFFICULTY_ORDER.indexOf(difficulty) + 1) % DIFFICULTY_ORDER.length], !paused);
   if (paused) { menu.handle(a); return; }
+  if (race.phase === 'intro' && (a.confirm || a.back || a.pause)) { startCountdown(); return; }
   if (a.pause) { pauseGame(); return; }
-  if (a.camera) { camMode = (camMode + 1) % CAMERAS.length; hud.toast(`Câmera: ${CAMERAS[camMode]}`, 'info', 1200); }
+  if (a.camera) { camMode = (camMode + 1) % CAMERAS.length; hud.toast(t('Câmera: {name}', { name: t(CAMERAS[camMode]) }), 'info', 1200); }
   if (a.transmission) {
     car.automatic = !car.automatic;
     if (car.automatic && car.gear === 0) car.gear = 1;
-    hud.toast(car.automatic ? 'Câmbio automático' : 'Câmbio manual (Q / E)', 'info', 1400);
+    hud.toast(t(car.automatic ? 'Câmbio automático' : 'Câmbio manual (Q / E)'), 'info', 1400);
   }
   for (const [action, dir] of [['shiftUp', 1], ['shiftDown', -1]]) {
     if (!a[action]) continue;
-    if (car.automatic) { car.automatic = false; hud.toast('Câmbio manual', 'info', 1400); }
+    if (car.automatic) { car.automatic = false; hud.toast(t('Câmbio manual'), 'info', 1400); }
     shift(car, dir);
   }
-  if (a.mute) { audio.setMuted(!audio.muted); hud.toast(audio.muted ? 'Som desligado' : 'Som ligado', 'info', 1000); }
+  if (a.mute) { audio.setMuted(!audio.muted); hud.toast(t(audio.muted ? 'Som desligado' : 'Som ligado'), 'info', 1000); }
   if (a.crt) {
     menu.setConfig({ crt: !config.crt });
-    hud.toast(config.crt ? 'Efeito CRT ligado' : 'Efeito CRT desligado', 'info', 1200);
+    hud.toast(t(config.crt ? 'Efeito CRT ligado' : 'Efeito CRT desligado'), 'info', 1200);
   }
   if (a.mist) {
     menu.setConfig({ mist: !config.mist });
-    hud.toast(config.mist ? 'Névoa ligada' : 'Névoa desligada', 'info', 1200);
+    hud.toast(t(config.mist ? 'Névoa ligada' : 'Névoa desligada'), 'info', 1200);
   }
-  if (a.ghost) { menu.setConfig({ ghost: !config.ghost }); hud.toast(config.ghost ? 'Fantasma visível' : 'Fantasma oculto', 'info', 1000); }
-  if (a.tcs) { car.tcs = !car.tcs; hud.toast(`Controle de tração ${car.tcs ? 'ligado (atrapalha o drift)' : 'desligado'}`, 'info', 1600); }
-  if (a.abs) { car.abs = !car.abs; hud.toast(`ABS ${car.abs ? 'ligado' : 'desligado'}`, car.abs ? 'info' : 'bad', 1400); }
+  if (a.ghost) { menu.setConfig({ ghost: !config.ghost }); hud.toast(t(config.ghost ? 'Fantasma visível' : 'Fantasma oculto'), 'info', 1000); }
+  if (a.tcs) { car.tcs = !car.tcs; hud.toast(t(car.tcs ? 'Controle de tração ligado (atrapalha o drift)' : 'Controle de tração desligado'), 'info', 1600); }
+  if (a.abs) { car.abs = !car.abs; hud.toast(t(car.abs ? 'ABS ligado' : 'ABS desligado'), car.abs ? 'info' : 'bad', 1400); }
   if (a.driftAssist) {
     car.driftAssist = !car.driftAssist;
-    hud.toast(`Assistência de drift ${car.driftAssist ? 'ligada' : 'desligada'}`, car.driftAssist ? 'info' : 'bad', 1600);
+    hud.toast(t(car.driftAssist ? 'Assistência de drift ligada' : 'Assistência de drift desligada'), car.driftAssist ? 'info' : 'bad', 1600);
   }
   if (a.reset && race.phase === 'running') {
     scorer.resetCombo();
@@ -788,8 +852,9 @@ function wallDistance() {
   return best;
 }
 
-function simulate(dt) {
-  let inp = input.update(dt);
+// demo: carro da tela de título pilotado pela IA (sem pontos, danos, vibração nem replay)
+function simulate(dt, demoMode = false) {
+  let inp = demoMode ? demo.driver.update(idx, dt, []) : input.update(dt);
   if (race.phase === 'finished') inp = { throttle: 0, brake: 0.25, steer: 0, handbrake: 0 }; // passou da chegada: freia sozinho
   acc += dt;
   let steps = 0;
@@ -833,11 +898,29 @@ function simulate(dt) {
     });
   }
 
+  if (demoMode) {
+    demo.scorer.update(simDt, { angle: car.driftAngle, speed: car.speed, onGrass: false, wallImpact: impact ? impact.speed : 0, carImpact: 0, wallDistance: 5 });
+    for (const ev of demo.scorer.events.splice(0)) if (ev.type === 'bank') driftTrail.flash('bank');
+  }
+
   let comboLost = false;
   for (const ev of scorer.events.splice(0)) {
-    if (ev.type === 'bank') { hud.popup(`+${formatPoints(ev.points)}`, 'bank'); driftTrail.flash('bank'); profile.bank(ev.points); }
-    else if (ev.type === 'bonus') hud.bonus(ev.label, ev.points);
-    else if (ev.type === 'lost') { hud.popup(LOST_REASON[ev.reason], 'lost'); input.hit(0.7, 260); driftTrail.flash('lost'); comboLost = true; }
+    if (ev.type === 'bank') {
+      hud.popup(`+${formatPoints(ev.points)}`, 'bank'); driftTrail.flash('bank'); profile.bank(ev.points);
+      if (ev.points >= 12000) announcer.say('greatDrift', { priority: 1, cooldown: 3 });
+      else if (ev.points >= 2500) announcer.say('niceDrift', { priority: 0, cooldown: 5 });
+    } else if (ev.type === 'bonus') hud.bonus(ev.label.startsWith('NOTA ') ? t('NOTA {grade}', { grade: ev.label.slice(5) }) : t(ev.label), ev.points);
+    else if (ev.type === 'lost') {
+      hud.popup(t(LOST_REASON[ev.reason]), 'lost'); input.hit(0.7, 260); driftTrail.flash('lost'); comboLost = true;
+      announcer.say(ev.reason === 'spin' ? 'spin' : 'crash', { priority: 1, cooldown: 3 });
+    }
+  }
+  // Música e narrador acompanham o multiplicador: camadas no x3 e no x5
+  if (race.phase === 'running') {
+    const level = scorer.active ? (scorer.mult >= 5 ? 2 : scorer.mult >= 3 ? 1 : 0) : 0;
+    audio.setMusicCombo(level, comboLost);
+    if (level === 2 && !race.maxCalled) { race.maxCalled = true; announcer.say('maxCombo', { priority: 1, cooldown: 0 }); }
+    if (!scorer.active) race.maxCalled = false;
   }
   for (const ev of timer.events.splice(0)) {
     const { samples, ...lap } = ev;
@@ -845,12 +928,15 @@ function simulate(dt) {
     profile.lap(ev.points);
     // Ranking de voltas por pista e carro (com o fantasma desta volta)
     const rank = submitLap(trackId, playerCarId, { points: ev.points, time: ev.time, difficulty, timeOfDay: timeId }, samples);
-    if (rank) { race.rankBest = race.rankBest ? Math.min(race.rankBest, rank) : rank; hud.toast(`Volta no ranking: ${rank}º lugar`, 'best', 2600); }
+    if (rank) { race.rankBest = race.rankBest ? Math.min(race.rankBest, rank) : rank; hud.toast(t('Volta no ranking: {rank}º lugar', { rank }), 'best', 2600); }
     if (ev.best) race.bestLap = true;
     if (race.laps && ev.lap >= race.laps) { finishRace(); continue; }
-    const lastLapNext = race.laps && ev.lap === race.laps - 1 ? ' · ÚLTIMA VOLTA' : '';
-    if (ev.best) hud.toast(`Melhor volta: ${formatPoints(ev.points)} pts${lastLapNext}`, 'best', 3000);
-    else hud.toast(`Volta: ${formatPoints(ev.points)} pts${lastLapNext}`, lastLapNext ? 'best' : 'info', 2400);
+    const lastLap = race.laps && ev.lap === race.laps - 1;
+    const lastLapNext = lastLap ? ` · ${t('ÚLTIMA VOLTA')}` : '';
+    if (ev.best) hud.toast(`${t('Melhor volta: {points} pts', { points: formatPoints(ev.points) })}${lastLapNext}`, 'best', 3000);
+    else hud.toast(`${t('Volta: {points} pts', { points: formatPoints(ev.points) })}${lastLapNext}`, lastLapNext ? 'best' : 'info', 2400);
+    if (lastLap) announcer.say('finalLap', { priority: 2, cooldown: 0 });
+    else if (ev.best && ev.lap > 1) announcer.say('bestLap', { priority: 1 });
   }
 
   rivals.score(simDt, race.laps, race.phase === 'running');
@@ -861,12 +947,12 @@ function simulate(dt) {
   if (carHit && carHit.speed > 0.8) {
     particles.sparks(carHit.x, carHit.z, carHit.nx, carHit.nz, carHit.speed, groundY, car.vx * 0.5, car.vz * 0.5);
     audio.impact(carHit.speed);
-    if (carHit.speed > 1.5) { shake = Math.min(0.4, shake + carHit.speed * 0.03); input.hit(Math.min(1, 0.25 + carHit.speed * 0.08), 200); }
+    if (carHit.speed > 1.5 && !demoMode) { shake = Math.min(0.4, shake + carHit.speed * 0.03); input.hit(Math.min(1, 0.25 + carHit.speed * 0.08), 200); }
   }
 
   // Batida / raspão na parede
-  if (impact) addDamage(impact, simDt, true);
-  if (carHit && carHit.speed > 0.5) addDamage({ ...carHit, x: carHit.x, z: carHit.z }, simDt, carHit.speed < 3);
+  if (impact && !demoMode) addDamage(impact, simDt, true);
+  if (carHit && carHit.speed > 0.5 && !demoMode) addDamage({ ...carHit, x: carHit.x, z: carHit.z }, simDt, carHit.speed < 3);
   if (impact) {
     const strength = impact.speed;
     if (strength > 0.6) {
@@ -876,7 +962,7 @@ function simulate(dt) {
     // Raspando: jato contínuo de faíscas enquanto encosta andando
     particles.grind(impact.x, impact.z, impact.nx, impact.nz, car.vx, car.vz, simDt, groundY);
     sparkLight.position.set(impact.x + impact.nx * 0.6, groundY + 0.5, impact.z + impact.nz * 0.6);
-    if (strength > 1.5) {
+    if (strength > 1.5 && !demoMode) {
       shake = Math.min(0.4, shake + strength * 0.03);
       input.hit(Math.min(1, 0.25 + strength * 0.08), 200);
     }
@@ -917,13 +1003,15 @@ function simulate(dt) {
     });
     for (const ev of judge.events.splice(0)) {
       profile.grade(ev.grade);
+      if (ev.grade === 'SS') announcer.say('gradeSS', { priority: 2, cooldown: 0.5 });
+      else if (ev.grade === 'S') announcer.say('gradeS', { priority: 1, cooldown: 1 });
       hud.grade(ev);
       scorer.styleBonus(ev.grade, ev.bonus);
     }
   }
 
   // Grava o replay (jogador primeiro, depois os rivais na ordem da lista)
-  if (simDt > 0) {
+  if (simDt > 0 && !demoMode) {
     recorder.record(simDt, [
       { car, skid: rearSkid, mult: scorer.active ? scorer.mult : 0 },
       ...rivals.list.map((e) => ({ car: e.car, skid: skidOf(e.car), mult: 0 })),
@@ -932,7 +1020,34 @@ function simulate(dt) {
 
   const tarmac = sf === SURFACES.asphalt || sr === SURFACES.asphalt;
   audio.update(car, tarmac ? Math.max(rearSkid, frontSkid) : 0, rumble);
-  input.rumble(tarmac ? rearSkid * 0.35 : 0.15 * Math.min(1, car.speed / 15), rumble ? 0.35 : 0);
+  if (!demoMode) input.rumble(tarmac ? rearSkid * 0.35 : 0.15 * Math.min(1, car.speed / 15), rumble ? 0.35 : 0);
+}
+
+// --- Tela de título: o carro do jogador faz drift sozinho pela pista, filmado pelas câmeras de TV -----------------
+const demo = { active: false, driver: null, scorer: new DriftScorer() };
+const DEMO_SCREENS = new Set(['main', 'profile', 'config', 'controls']);
+function startDemo() {
+  demo.active = true;
+  rivals.clear();
+  applyDifficulty(car, 'facil'); // a IA pilota com o controle de ângulo
+  car.automatic = true;
+  if (car.gear < 1) car.gear = 1;
+  demo.driver = new DriftDriver(car, track, { skill: 0.95, lane: 0, seed: 1 + Math.floor(Math.random() * 9999) });
+  demo.scorer.resetRace();
+  resetDamage();
+  skids.clear();
+  driftTrail.clear();
+  director.setTrack(track);
+  acc = 0;
+}
+function stopDemo() {
+  demo.active = false;
+  setDifficulty(difficulty);
+  placeOnGrid();
+  resetDamage();
+  skids.clear();
+  driftTrail.clear();
+  if (camera.view?.enabled) { camera.clearViewOffset(); camera.updateProjectionMatrix(); }
 }
 
 function frame(now) {
@@ -943,13 +1058,16 @@ function frame(now) {
   updatePadStatus(dt);
   handleActions();
   if (!freeCam.active) updateRace(dt);
+  const wantDemo = race.phase === 'menu' && DEMO_SCREENS.has(menu.current) && !freeCam.active;
+  if (wantDemo !== demo.active) (wantDemo ? startDemo : stopDemo)();
+  if (demo.active) simulate(dt, true);
   if (!paused && !freeCam.active && (race.phase === 'running' || race.phase === 'finished')) simulate(dt * debug.timeScale);
 
   if (replay.playing && menu.current !== 'results' && !freeCam.active) stopReplay();
   if (replay.playing) updateReplay(dt);
   else {
     carModel.update(car);
-    driftTrail.update(paused || freeCam.active ? 0 : dt, car, carModel.tailLights, scorer, camera);
+    driftTrail.update((paused && !demo.active) || freeCam.active ? 0 : dt, car, carModel.tailLights, demo.active ? demo.scorer : scorer, camera);
     rivals.updateVisuals(camera);
   }
   carModel.setDamage(damage);
@@ -962,12 +1080,21 @@ function frame(now) {
     ghostModel.setPose(pose.x, pose.z, pose.yaw, ghostGround.y, ghostGround.pitch);
   }
 
+  let cut = false;
   if (freeCam.active) freeCam.update(dt);
-  else if (!replay.playing) {
+  else if (demo.active) {
+    director.update(dt, camera, car);
+    // Na tela de título o carro aparece à direita do cartão
+    if (menu.current === 'main' && innerWidth > 720) camera.setViewOffset(innerWidth, innerHeight, -innerWidth * 0.2, 0, innerWidth, innerHeight);
+    else if (camera.view?.enabled) camera.clearViewOffset();
+    camera.updateProjectionMatrix();
+  } else if (race.phase === 'intro' && intro) {
+    if (!paused) cut = intro.update(dt, camera).cut;
+  } else if (!replay.playing) {
     if (!paused && race.phase !== 'countdown') updateOrbit(dt);
     updateCamera(paused ? 0.016 : dt, rumble && !paused);
   }
-  particles.update((paused && !replay.playing) || freeCam.active ? 0 : dt, camera, pipeline.internalHeight);
+  particles.update((paused && !replay.playing && !demo.active) || freeCam.active ? 0 : dt, camera, pipeline.internalHeight);
   // Luz das faíscas: acende com as que nasceram neste quadro e apaga rápido, tremendo
   sparkGlow = Math.max(sparkGlow * Math.exp(-dt * 14), Math.min(1, particles.sparkLevel / 6));
   particles.sparkLevel = 0;
@@ -977,7 +1104,7 @@ function frame(now) {
   fogUniforms.uFogTime.value = now / 1000;
   debugInfo.fps = fps;
   debug.update(dt, debugInfo);
-  hud.update(car, timer, scorer, { fps, ghost: pose, padName, difficulty: DIFFICULTIES[difficulty].label, totalLaps: race.laps, rivals: rivals.list });
+  hud.update(car, timer, scorer, { fps, ghost: pose, padName, difficulty: t(DIFFICULTIES[difficulty].label), totalLaps: race.laps, rivals: rivals.list });
   race.standingsTimer -= dt;
   if (race.standingsTimer <= 0) {
     race.standingsTimer = 0.25;
@@ -985,8 +1112,10 @@ function frame(now) {
   }
   // Rastro cresce com a velocidade, como nos jogos de corrida da época.
   // Música: cheia na corrida, abafada nos menus e na pausa
-  audio.setMusicIntensity(freeCam.active ? 0.55 : menu.current === 'results' ? 0.7 : race.phase === 'menu' ? 0.45 : paused ? 0.3 : 1);
-  pipeline.render(scene, camera, { trail: (paused ? 0.05 : 0.06 + Math.min(0.16, car.speed * 0.004)) * config.trail });
+  audio.setMusicIntensity(freeCam.active ? 0.55 : menu.current === 'results' ? 0.7 : race.phase === 'intro' ? 0.8 : race.phase === 'menu' ? 0.5 : paused ? 0.3 : 1);
+  if (race.phase !== 'running') audio.setMusicCombo(0);
+  const trail = cut ? 0 : paused && !demo.active ? 0.05 : 0.06 + Math.min(0.16, car.speed * 0.004);
+  pipeline.render(scene, camera, { trail: trail * config.trail });
   requestAnimationFrame(frame);
 }
 
@@ -1001,7 +1130,7 @@ async function loadCustomCar() {
     ]);
     const gltf = await new GLTFLoader().loadAsync('assets/carro.glb');
     carModel.useGltf(gltf.scene, config);
-    hud.toast('Carro personalizado carregado', 'info', 2000);
+    hud.toast(t('Carro personalizado carregado'), 'info', 2000);
   } catch (err) {
     console.warn('Não foi possível carregar assets/carro.glb', err);
   }
@@ -1009,7 +1138,7 @@ async function loadCustomCar() {
 loadCustomCar();
 
 // Acesso pelo console para depuração e ajuste de acerto (ex.: game.CAR.counterSteer = 0.7).
-window.game = { car, damage, profile, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
+window.game = { frame: (now) => frame(now), car, damage, profile, announcer, demo, get intro() { return intro; }, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
 
 // Posiciona a câmera antes do primeiro frame para não "voar" até o carro.
 camera.position.set(car.x - Math.sin(car.yaw) * 6.6, 2.4, car.z - Math.cos(car.yaw) * 6.6);

@@ -7,22 +7,22 @@ const STORAGE_KEY = 'corrida3d.garagem';
 export const PAINTS = [
   { id: 'original', name: 'COR ORIGINAL', color: null },
   { id: 'vermelho', name: 'VERMELHO SUPER', color: 0xb3141e },
-  { id: 'branco', name: 'BRANCO PÉROLA', color: 0xe6e6e1 },
+  { id: 'branco', name: 'BRANCO PÉROLA', color: 0xe6e6e1, finish: 'pearl' },
   { id: 'preto', name: 'PRETO NOITE', color: 0x111214 },
-  { id: 'prata', name: 'PRATA LUNAR', color: 0x9ea3aa },
-  { id: 'azul', name: 'AZUL MIDNIGHT', color: 0x1b2f6b },
+  { id: 'prata', name: 'PRATA LUNAR', color: 0x9ea3aa, finish: 'metallic' },
+  { id: 'azul', name: 'AZUL MIDNIGHT', color: 0x1b2f6b, finish: 'metallic' },
   { id: 'amarelo', name: 'AMARELO RACING', color: 0xe0a800 },
   { id: 'verde', name: 'VERDE TÓQUIO', color: 0x1f6b3a },
   { id: 'laranja', name: 'LARANJA SUNSET', color: 0xd9601a },
   { id: 'roxo', name: 'ROXO NEON', color: 0x4b2a7a },
   { id: 'rosa', name: 'ROSA SAKURA', color: 0xd94f9a },
   { id: 'ciano', name: 'CIANO WANGAN', color: 0x1f9fb0 },
-  { id: 'grafite', name: 'GRAFITE METÁLICO', color: 0x3b3e44, unlock: 'estrada-1' },
-  { id: 'bayside', name: 'AZUL BAYSIDE', color: 0x1532a0, unlock: 'combo-1' },
+  { id: 'grafite', name: 'GRAFITE METÁLICO', color: 0x3b3e44, finish: 'metallic', unlock: 'estrada-1' },
+  { id: 'bayside', name: 'AZUL BAYSIDE', color: 0x1532a0, finish: 'metallic', unlock: 'combo-1' },
   { id: 'vinho', name: 'VINHO', color: 0x5c0f1e, unlock: 'drift-1' },
   { id: 'lima', name: 'VERDE LIMA', color: 0x86b818, unlock: 'angulo-2' },
-  { id: 'galaxia', name: 'ROXO GALÁXIA', color: 0x2a1458, unlock: 'drift-3' },
-  { id: 'dourado', name: 'OURO CHAMPAGNE', color: 0xb08d3e, unlock: 'ss-3' },
+  { id: 'galaxia', name: 'ROXO GALÁXIA', color: 0x2a1458, finish: 'pearl', unlock: 'drift-3' },
+  { id: 'dourado', name: 'OURO CHAMPAGNE', color: 0xb08d3e, finish: 'metallic', unlock: 'ss-3' },
 ];
 
 export const RIMS = [
@@ -128,6 +128,7 @@ export function saveGarage(carId, config) {
 export function garageLook(config) {
   return {
     color: find(PAINTS, config.paint).color,
+    finish: find(PAINTS, config.paint).finish ?? 'solid',
     rims: config.rims === 'original' ? null : config.rims,
     rimColor: find(RIM_COLORS, config.rimColor).color,
     wing: config.wing,

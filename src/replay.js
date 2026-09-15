@@ -171,3 +171,66 @@ export class ReplayDirector {
     if (this.time >= shot.max) this.next(car);
   }
 }
+
+// Sobrevoo antes da largada: três planos de TV (helicóptero passando por um trecho bonito, câmera baixa na curva
+// mais fechada e descida sobre o grid) e depois a contagem. grid: índice da amostra no meio do grid.
+const INTRO_SHOTS = [2.6, 2.4, 3.0];
+export const INTRO_DURATION = INTRO_SHOTS.reduce((a, b) => a + b, 0);
+const ease = (x) => x * x * (3 - 2 * x);
+
+export class IntroDirector {
+  constructor(track, grid) {
+    this.track = track;
+    this.time = 0;
+    const { N, curv, ds } = track;
+    const at = (j) => ((Math.round(j) % N) + N) % N;
+    // Curva mais fechada longe da largada
+    let apex = at(N / 2), peak = 0;
+    for (let j = Math.round(N * 0.2); j < N * 0.85; j++) if (Math.abs(curv[j]) > peak) { peak = Math.abs(curv[j]); apex = j; }
+    this.plan = { scenic: at(N * 0.3), apex, grid: at(grid), span: Math.round(60 / ds) };
+    this.shot = -1;
+  }
+
+  get done() { return this.time >= INTRO_DURATION; }
+
+  point(j, lateral = 0, up = 0, out = new THREE.Vector3()) {
+    // Interpola entre amostras vizinhas (j pode ser fracionário: câmera andando sem trancos)
+    const { x, z, nx, nz, N } = this.track, y = this.track.y;
+    const f = Math.floor(j), w = j - f, a = ((f % N) + N) % N, b = (a + 1) % N;
+    const mix = (arr) => arr[a] + (arr[b] - arr[a]) * w;
+    return out.set(mix(x) + mix(nx) * lateral, (y ? mix(y) : 0) + up, mix(z) + mix(nz) * lateral);
+  }
+
+  // Posiciona a câmera; devolve o índice do plano (muda = corte seco)
+  update(dt, camera) {
+    this.time += dt;
+    let t = this.time, shot = 0;
+    while (shot < INTRO_SHOTS.length - 1 && t > INTRO_SHOTS[shot]) { t -= INTRO_SHOTS[shot]; shot++; }
+    const p = ease(Math.min(1, t / INTRO_SHOTS[shot]));
+    const { scenic, apex, grid, span } = this.plan;
+    const from = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3();
+    if (shot === 0) {
+      // Helicóptero alto andando junto da pista
+      this.point(scenic, 34, 42, from); this.point(scenic + span, 26, 36, to);
+      this.point(scenic + span * 0.5 + p * span * 0.5, 0, 0, look);
+      camera.fov = 50;
+    } else if (shot === 1) {
+      // Baixa, do lado de fora da curva, aproximando
+      const side = this.track.curv[apex] > 0 ? -1 : 1;
+      this.point(apex - 14, side * (WALL_OFFSET + 5), 3.2, from); this.point(apex - 6, side * (WALL_OFFSET + 2), 2.2, to);
+      this.point(apex + 4, 0, 0.8, look);
+      camera.fov = 44;
+    } else {
+      // Desce por trás do grid até a altura da câmera de perseguição
+      this.point(grid - span * 0.9, 0, 26, from); this.point(grid - Math.round(22 / this.track.ds), 0, 3.4, to);
+      this.point(grid + Math.round(14 / this.track.ds), 0, 1.2, look);
+      camera.fov = 58;
+    }
+    camera.position.lerpVectors(from, to, p);
+    camera.lookAt(look);
+    camera.updateProjectionMatrix();
+    const cut = shot !== this.shot;
+    this.shot = shot;
+    return { shot, cut };
+  }
+}

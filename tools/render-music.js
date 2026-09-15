@@ -1,5 +1,6 @@
 // Gera um .wav estéreo de uma música eurobeat do jogo, para ouvir fora do navegador.
 // Uso: node tools/render-music.js [saida.wav] [música 0-5] [segundos=90] [início em compassos=0]
+// COMBO="8:1,16:2,24:0!" liga as camadas do combo nesses segundos (1 = x3, 2 = x5, ! = combo perdido)
 import { writeFileSync } from 'node:fs';
 import { MusicDSP, SONGS } from '../src/music-dsp.js';
 
@@ -20,9 +21,11 @@ const bl = new Float32Array(block), br = new Float32Array(block);
 const skipSamples = Math.round(skipBars * 16 * dsp.stepSamples);
 for (let done = 0; done < skipSamples; done += block) dsp.process(bl, br);
 
+const comboPlan = (process.env.COMBO || "").split(",").filter(Boolean).map((p) => { const [t, lv] = p.split(":"); return { at: Number(t) * SR, level: parseInt(lv, 10), lost: lv.endsWith("!") }; });
 const t0 = performance.now();
 let peak = 0, sumSq = 0, bad = 0;
 for (let n = 0; n < total; n += block) {
+  for (const c of comboPlan) if (!c.done && n >= c.at) { dsp.setCombo(c.level, c.lost); c.done = true; }
   dsp.process(bl, br);
   for (let i = 0; i < block && n + i < total; i++) {
     L[n + i] = bl[i]; R[n + i] = br[i];

@@ -1,5 +1,5 @@
 // AudioWorklet da música: toca o eurobeat procedural (MusicDSP) em estéreo.
-// Mensagens: { type: 'intensity', value } · { type: 'next' } · { type: 'song', index }. Avisa a música atual com { type: 'song', name, index, bpm }.
+// Mensagens: { type: 'intensity', value } · { type: 'combo', level, lost } · { type: 'next' } · { type: 'song', index }. Avisa a música atual com { type: 'song', name, index, bpm }.
 import { MusicDSP } from './music-dsp.js';
 
 class MusicProcessor extends AudioWorkletProcessor {
@@ -15,6 +15,7 @@ class MusicProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'intensity') this.dsp.setIntensity(m.value);
+      else if (m.type === 'combo') this.dsp.setCombo(m.level, m.lost);
       else if (m.type === 'next') this.dsp.nextSong();
       else if (m.type === 'song') this.dsp.loadSong(m.index);
     };

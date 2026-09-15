@@ -4,6 +4,7 @@ import { formatTime, formatPoints } from './laps.js';
 import { CAR, paramsOf } from './physics.js';
 import { DRIFT } from './drift.js';
 import { SegDisplay, SegBar } from './segments.js';
+import { t } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const TACH_MAX = 8000;
@@ -122,8 +123,8 @@ export class Hud {
 
   update(car, timer, scorer, { fps, ghost, padName, difficulty, totalLaps = 0, rivals = [] }) {
     const e = this.el;
-    const lapText = totalLaps ? `VOLTA ${Math.min(timer.lap, totalLaps)}/${totalLaps}` : `VOLTA ${String(timer.lap).padStart(2, '0')}`;
-    setText(e.lap, timer.lap === 0 ? 'SAÍDA' : lapText);
+    const lapText = totalLaps ? t('VOLTA {lap}/{laps}', { lap: Math.min(timer.lap, totalLaps), laps: totalLaps }) : t('VOLTA {lap}', { lap: String(timer.lap).padStart(2, '0') });
+    setText(e.lap, timer.lap === 0 ? t('SAÍDA') : lapText);
     setText(e.lapTime, timer.lap === 0 ? '-:--.--' : formatTime(timer.time).slice(0, -1));
     this.lapPoints.set(Math.round(scorer.lapPoints));
     setText(e.last, timer.lastLap ? formatPoints(timer.lastLap.points) : '-------');
@@ -161,7 +162,7 @@ export class Hud {
 
     setText(e.fps, `${Math.round(fps)} FPS`);
     e.pad.hidden = !padName;
-    if (padName) setText(e.pad, padName.toUpperCase());
+    if (padName) setText(e.pad, t(padName).toUpperCase());
     this.drawMinimap(car, ghost, rivals);
   }
 
@@ -196,10 +197,10 @@ export class Hud {
       root: $('grade'), corner: $('grade-corner'), letter: $('grade-letter'), bonus: $('grade-bonus'),
       bars: { angle: new SegBar($('grade-angle'), 10), line: new SegBar($('grade-line'), 10), smoke: new SegBar($('grade-smoke'), 10) },
     });
-    el.corner.textContent = `CURVA ${ev.corner}`;
+    el.corner.textContent = t('CURVA {n}', { n: ev.corner });
     el.letter.textContent = ev.failed ? 'X' : ev.grade;
     el.root.dataset.grade = ev.failed ? 'fail' : ev.grade;
-    el.bonus.textContent = ev.failed ? 'BATEU' : ev.bonus ? `+${formatPoints(ev.bonus)}` : '';
+    el.bonus.textContent = ev.failed ? t('BATEU') : ev.bonus ? `+${formatPoints(ev.bonus)}` : '';
     for (const key of ['angle', 'line', 'smoke']) el.bars[key].set(ev[key]);
     el.root.hidden = false;
     el.root.classList.remove('show');
@@ -224,7 +225,7 @@ export class Hud {
     const c = (this.countEl ||= document.getElementById('countdown'));
     if (c.textContent === text) return;
     c.textContent = text;
-    c.dataset.go = String(text === 'JÁ!');
+    c.dataset.go = String(text === t('JÁ!'));
     c.classList.remove('show');
     if (!text) return;
     void c.offsetWidth; // reinicia a animação a cada número

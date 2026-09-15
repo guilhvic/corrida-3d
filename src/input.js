@@ -1,5 +1,6 @@
 // Teclado + controle (Xbox/PlayStation no mapeamento "standard" do navegador).
 // Teclado usa rampas para imitar um controle analógico.
+import { t } from './i18n.js';
 
 const BLOCK = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
 
@@ -73,10 +74,10 @@ export class Input {
 
   // Texto de diagnóstico do que o navegador está enxergando.
   diagnostics() {
-    if (!navigator.getGamepads) return 'Este navegador não tem suporte a controles (Gamepad API).';
-    if (!isSecureContext) return 'Página fora de contexto seguro: abra por http://localhost.';
+    if (!navigator.getGamepads) return t('Este navegador não tem suporte a controles (Gamepad API).');
+    if (!isSecureContext) return t('Página fora de contexto seguro: abra por http://localhost.');
     const pads = this.pads();
-    if (!pads.length) return 'Nenhum controle visível para a página. Clique aqui na tela e aperte o botão A.';
+    if (!pads.length) return t('Nenhum controle visível para a página. Clique aqui na tela e aperte o botão A.');
     return pads.map((p) => {
       const pressed = p.buttons.map((b, i) => (b.pressed ? i : null)).filter((i) => i !== null);
       const axes = p.axes.map((a) => a.toFixed(1)).join(' ');

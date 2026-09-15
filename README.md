@@ -31,15 +31,25 @@ A tela inicial tem **SINGLEPLAYER**, **PERFIL**, **MULTIPLAYER** (em breve) e **
 
 Os cenários das três pistas são montados uma vez, durante a tela de carregamento inicial (cerca de 1,3 s a mais, já desenhando cada horário para subir texturas e compilar shaders), e ficam em memória: trocar de pista só esconde um e mostra o outro, e trocar de horário ou clima só muda luz, céu, neblina e efeitos (`setTime` em cada mundo). As duas trocas são praticamente instantâneas. O Fuji e as cordilheiras acompanham a câmera como um cenário distante; o relevo, as árvores e os arrozais são gerados com semente fixa (`src/worldFujimi.js`). Para testar a IA nas outras pistas: `TRACK=fujimi node tools/ai-lab.js 7 3` ou `TRACK=hakone` (com `DEBUG=1` mostra onde cada batida aconteceu).
 
+## Apresentação
+
+- **Tela de título:** o logo entra letra por letra e, ao fundo, o carro escolhido faz drift sozinho pela pista (a IA pilota), filmado pelas câmeras de TV do replay.
+- **Sobrevoo antes da largada:** helicóptero sobre um trecho da pista, câmera baixa na curva mais fechada e descida sobre o grid, com o nome da pista em tela; Enter/A pula. Não roda ao reiniciar pela pausa; desliga em SOBREVOO (`IntroDirector` em `src/replay.js`).
+- **Narrador em japonês** com a voz do próprio sistema (Web Speech API, `src/announcer.js`): contagem, ナイスドリフト, SS級, マックスコンボ, ファイナルラップ, ゴール, 優勝, メダル獲得 e boas-vindas no sobrevoo. Frases com prioridade (uma importante corta a outra). Volume em NARRADOR; sem voz japonesa instalada ele fica mudo e as configurações avisam como instalar.
+- **Música que cresce com o combo:** no x3 entram um segundo arpejo, chimbal em semicolcheias e virada de caixa; no x5, lead dobrado uma oitava acima, metais agudos e prato; perder o combo derruba as camadas e fecha o filtro por um instante (`setCombo` em `src/music-dsp.js`; para ouvir: `COMBO="6:1,12:2,18:0!" node tools/render-music.js combo.wav 3 30 36`).
+- **Idioma:** português ou inglês em CONFIGURAÇÕES › IDIOMA · LANGUAGE (padrão pelo idioma do navegador). O código mantém os textos em português e `t()` (`src/i18n.js`) busca a tradução em `src/lang-en.js`, com o texto original como chave; o HTML fixo é traduzido percorrendo os nós. Placas do mapa e narrador ficam em japonês nos dois idiomas.
+
 ## Carros
 
 Três carros no menu, cada um com modelo 3D e acerto próprios (`src/catalog.js`; o que não é sobrescrito vem de `CAR`):
 
 | Carro | Inspiração | Modelo | Acerto |
 |---|---|---|---|
-| KAZE 180 TURBO | 180SX | fastback, faróis escamoteáveis, aro de 6 raios | 1250 kg, entre-eixos 2,70 m, o acerto base |
-| SEIRAN S15 SPEC-R | Silvia S15 | três volumes, faróis fixos repuxados colados na lataria, lanternas trapezoidais, aerofólio no porta-malas, aro de 5 raios | 1240 kg, +10% de torque, corte a 8.000 rpm, entre-eixos 2,53 m |
-| TSUBAME NA ROADSTER | MX-5 NA | roadster de cockpit aberto (recorte na lataria), para-brisa, santantônio, capota recolhida, faróis escamoteáveis pequenos, aro "daisy" | 1010 kg, ~60% do torque, entre-eixos 2,27 m, CG mais baixo |
+| KAZE 180 TURBO | 180SX kouki | fastback com vigia até o aerofólio da tampa, faróis escamoteáveis levantados com dois refletores, para-choque de boca larga com aletas e lanternas de canto, lanterna traseira de ponta a ponta com friso central, antena, limpador traseiro, aro de 6 raios côncavo | 1250 kg, entre-eixos 2,70 m, o acerto base |
+| SEIRAN S15 SPEC-R | Silvia S15 | três volumes com cintura subindo para trás e vinco lateral, faróis repuxados com dois projetores, boca trapezoidal com colmeia, milhas redondas, lábio de carbono, lanternas que dobram a quina, aerofólio de três apoios, pintura perolizada, aro de 5 raios | 1240 kg, +10% de torque, corte a 8.000 rpm, entre-eixos 2,53 m |
+| TSUBAME NA ROADSTER | MX-5 NA | roadster redondo de cockpit aberto (recorte na lataria), para-brisa com moldura preta, santantônio, capota recolhida sob a capa, faróis escamoteáveis, boca oval, lanternas retangulares de quatro células, lábio no porta-malas, aro de malha com aba polida | 1010 kg, ~60% do torque, entre-eixos 2,27 m, CG mais baixo |
+
+**Modelos dos carros:** releituras procedurais dos carros reais, sem arquivos 3D. A lataria (`src/carBody.js`) é desenhada por linhas como numa planta: em cada ponto do comprimento a seção passa por centro de baixo, soleira, saia, ombro (vinco), cintura, calha do teto e borda da coluna, com vincos ajustáveis e para-choques em domo; a mesma superfície vira pintura, para-brisa, vigia e janelas (com borracha de vedação e vidro 1 cm para dentro), colunas pretas e recortes das caixas de roda ou do cockpit. Os vãos de portas, capô e tampas são desenhados na própria pintura pelo shader (`src/carMaterials.js`), junto com os amassados e riscos. Materiais: pintura com verniz (sólida, metálica ou perolizada; as cores metálicas e pérola da garagem usam o acabamento certo), vidro que reflete mais de lado, cromados e plásticos, todos com o reflexo do cenário. Peças (`src/carParts.js`): faróis escamoteáveis levantados feitos com o próprio pedaço do capô girado na dobradiça (tampa na cor do carro, laterais pretas em cunha, frente com a lâmpada e o vão escuro do capô na frente), retrovisores aerodinâmicos, maçanetas, limpadores, placas com moldura e parafusos, escapamento com abafador, cintas de reboque, grades, emblemas, refletores e projetores de farol e texturas de lanterna com favo e anel; uma sonda (`src/carProbe.js`) cola lanternas, bocas e frisos exatamente sobre a lataria. Rodas (`src/carWheels.js`): pneu com ombro, banda de rodagem e letreiro ZETA na lateral, aro com raios côncavos extrudados, cubo, aba e porcas, disco com furos e pinça. Interior com painel, instrumentos acesos, console com rádio, bancos concha com cintos, gaiola e piloto. Os detalhes miúdos e o interior somem nos rivais distantes; a lataria de cada carro é gerada uma vez e compartilhada. Para ver os carros de perto: `http://localhost:4400/tools/estudio.html` (ângulos prontos, fundo neutro com `?fundo=estudio`, pista e horário por `?track=fujimi&time=tarde`, P liga o pós-processamento de PS2).
 
 Cada carro tem o próprio som de motor: KAZE 180 com 4 cilindros turbo, SEIRAN com swap de 6 em linha turbo e TSUBAME com swap de rotativo de 2 rotores. Os rivais usam os três carros (e os três motores).
 
@@ -49,7 +59,7 @@ Cada carro tem o próprio som de motor: KAZE 180 com 4 cilindros turbo, SEIRAN c
 
 **Faíscas e marcas:** batidas soltam um leque de faíscas e raspar a mureta andando solta um jato contínuo que fica para trás do carro, com riscos brancos que esfriam para laranja e vermelho, quicam no asfalto e acendem uma luz laranja piscando no ponto do raspão. As marcas de pneu ficam na pista a corrida inteira (buffer de 16 mil trechos, só a parte nova sobe para a GPU), mais escuras e largas quanto mais o pneu escorrega, com desenho da banda de rodagem e bordas suaves; na chuva ficam mais fracas.
 
-**Danos:** batidas amassam para-choques e laterais e raspar a mureta risca a pintura do lado que encostou (deformação e riscos no shader dos materiais do carro). Zera a cada corrida. Os modelos saem de `src/carDesigns.js` (seções da lataria, estufa ou cockpit e as peças de cada carro) montados por `src/carModel.js` e `src/carShell.js`.
+**Danos:** batidas amassam para-choques e laterais e raspar a mureta risca a pintura do lado que encostou (deformação e riscos no shader dos materiais do carro). Zera a cada corrida. Os modelos são descritos em `src/cars/` e montados por `src/carModel.js` (ver Modelos dos carros).
 
 A corrida larga na reta logo depois da linha e já começa na volta 1 (a reta antes da linha é curta demais para um grid de 8).
 
@@ -114,12 +124,16 @@ Em todas, bater na mureta ou rodar zera o combo.
 | `src/worldHakone.js` | Serra de Hakone: relevo ajustado à estrada, muros de arrimo e mureta de pedra, sarjeta e barranco por seção, cedros e bordos, grampos com setas, espelhos e placas numeradas, casa de chá, postes de sódio, lago e mar de nuvens. |
 | `src/worldFujimi.js` | Estrada de Fujimi: céu de fim de tarde, Monte Fuji e cordilheiras, relevo, arrozais, vila, santuário, ferrovia e trem, guard-rails, placas. |
 | `src/world.js` | Cidade: asfalto molhado, calçadas, muretas, prédios com lojas e janelas acesas, neon, postes, fiação, semáforos. |
-| `src/carModel.js`, `src/carDesigns.js`, `src/carShell.js` | Modelos dos carros: partes comuns (interior, rodas, luzes), designs de cada carro e a lataria por seções com recorte de caixas de roda e cockpit. Opcional: `assets/carro.glb` (ver `assets/LEIA-ME.md`). |
+| `src/carModel.js`, `src/carDesigns.js`, `src/cars/` | Modelos dos carros: partes comuns (materiais, interior, rodas, luzes, garagem, danos) e os designs de cada carro (linhas da lataria, vidros, vãos e peças). Opcional: `assets/carro.glb` (ver `assets/LEIA-ME.md`). |
+| `src/carBody.js`, `src/carProbe.js`, `src/carParts.js`, `src/carWheels.js`, `src/carMaterials.js` | Lataria por linhas de desenho, sonda de superfície, biblioteca de peças, rodas e freios, materiais e shader de vãos/danos. |
+| `tools/estudio.html` | Estúdio para ver os carros de perto em qualquer pista, com ângulos prontos. |
 | `src/neon.js` | Bairro noturno: placas verticais salientes (atlas numa malha só), tubos de neon 3D com sequência e tremulação, contornos nos telhados, lâmpadas de marquise, lanternas de papel, telões de LED e poças de luz colorida. |
 | `src/textures.js` | Texturas procedurais pixel a pixel (asfalto com poças, rachaduras, bueiro e faixas gastas; blocos de calçada; guia; marcas de pneu; pintura 止まれ; piso tátil) com normal map e mapa especular. |
 | `src/fog.js` | Névoa rasteira 3D (densidade por altura integrada no raio + ruído que se move) injetada nos shaders de neblina do three.js, e cones de luz aditivos dos postes e faróis. Tecla N liga/desliga. |
 | `src/ps2.js` | Pós-processamento: cena em 540 linhas, bloom, rastro e pontilhado; passada final em resolução da tela com efeito CRT (scanlines leves, grade de fósforo, curvatura, aberração cromática; tecla V). |
 | `src/ai.js`, `src/rivals.js`, `src/traffic.js`, `src/race.js` | Piloto de IA de drift, rivais no jogo (modelo, nome, pontos, voltas), colisão entre carros e grid de largada. |
+| `src/i18n.js`, `src/lang-en.js` | Idioma da interface (português/inglês) e dicionário inglês. |
+| `src/announcer.js` | Narrador em japonês pela voz do sistema. |
 | `src/menu.js`, `src/catalog.js` | Menus (inicial, singleplayer, garagem, ranking, perfil, configurações, controles, pausa, resultado) e lista de pistas/carros/voltas. |
 | `src/debug.js` | Painel de debug (B): telemetria, gráficos e ajuste fino dos parâmetros com persistência e exportação em JSON. |
 | `src/hud.js`, `src/segments.js` | HUD estilo painel eletrônico anos 80-90 (VFD): dígitos de 7 segmentos em SVG, conta-giros em barras, luzes de aviso. |

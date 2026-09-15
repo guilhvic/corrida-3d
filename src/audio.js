@@ -41,6 +41,13 @@ export class CarAudio {
     this.music?.port.postMessage({ type: 'intensity', value: v });
   }
 
+  // Camadas da música pelo combo: 0 nada, 1 (x3), 2 (x5). lost: perdeu o combo
+  setMusicCombo(level, lost = false) {
+    if (level === this.musicCombo && !lost) return;
+    this.musicCombo = level;
+    this.music?.port.postMessage({ type: 'combo', level, lost });
+  }
+
   setMusicOn(on) {
     this.musicOn = on;
     try { localStorage.setItem('corrida3d.musica', on ? '1' : '0'); } catch { /* sem storage */ }

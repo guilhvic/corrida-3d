@@ -1,6 +1,9 @@
 // Eurobeat procedural: compõe e toca músicas originais amostra a amostra (sem arquivos de áudio).
 // Cada música sai de uma semente: tom, andamento, progressões, melodia do refrão, arpejo e timbres.
 // Estrutura: intro, verso, pré-refrão (virada + subida), refrão, break, verso, pré, refrão, refrão modulado, final.
+// Camadas do combo (setCombo): no x3 entram chimbal em semicolcheias e um segundo arpejo uma oitava acima; no x5,
+// o lead dobrado uma oitava acima, prato a cada 2 compassos e brilho de acordes agudos. Perder o combo derruba
+// as camadas e fecha o filtro por um instante.
 // Módulo puro: roda no AudioWorklet do jogo e no Node (tools/render-music.js).
 
 const TAU = Math.PI * 2;
@@ -216,6 +219,7 @@ export class MusicDSP {
     this.sr = sampleRate;
     this.rand = mulberry32(99);
     this.intensity = 1; this.intensityTarget = 1;
+    this.comboLevel = 0; this.mix1 = 0; this.mix2 = 0; this.drop = 0;
     this.playing = true;
     this.onSong = null;
     // Bateria
@@ -229,7 +233,8 @@ export class MusicDSP {
     // Baixo, arpejo, lead, acordes, subida de ruído
     this.bass = { ph: 0, inc: 0, t: 9, gate: 0, level: 0, filter: new SVF(), cut: 400 };
     this.arpV = { ph: 0, inc: 0, t: 9, level: 0, filter: new SVF(), pan: 0 };
-    this.lead = { ph1: 0, ph2: 0, ph3: 0, freq: 440, target: 440, t: 9, gate: 0, env: 0, level: 0, filter: new SVF() };
+    this.arp2 = { ph: 0, inc: 0, t: 9, level: 0, filter: new SVF(), pan: 0 };
+    this.lead = { ph1: 0, ph2: 0, ph3: 0, ph4: 0, freq: 440, target: 440, t: 9, gate: 0, env: 0, level: 0, filter: new SVF() };
     this.chords = Array.from({ length: 14 }, () => new ChordVoice());
     this.riser = { t: 9, len: 0, filter: new SVF() };
     // Efeitos: delay pingue-pongue e reverb curto (Schroeder)
@@ -256,6 +261,14 @@ export class MusicDSP {
   nextSong() { this.loadSong(this.song.index + 1); }
   setIntensity(v) { this.intensityTarget = Math.max(0, Math.min(1, v)); }
 
+  // level 0 = sem camadas, 1 = multiplicador x3, 2 = x5. lost: combo perdido (queda das camadas com filtro fechando)
+  setCombo(level, lost = false) {
+    const next = Math.max(0, Math.min(2, level | 0));
+    if (next > this.comboLevel) this.trigger(this.crash, next === 2 ? 0.6 : 0.35); // prato ao subir de camada
+    if (lost && this.comboLevel > 0) this.drop = 1;
+    this.comboLevel = next;
+  }
+
   // --- Sequenciador (chamado a cada semicolcheia) -------------------------------------------------------
   step() {
     this.stepInBar++;
@@ -280,10 +293,13 @@ export class MusicDSP {
     if (sec.kick && s % 4 === 0 && !(fillZone && s >= 12)) { this.kick.t = 0; this.kick.amp = 1; }
     if (sec.snare && (s === 4 || s === 12) && !fillZone) this.trigger(this.snare, 0.8);
     if (fillZone) this.trigger(this.snare, 0.35 + ((s - 8) / 8) * 0.6); // virada em semicolcheias crescendo
-    if (sec.hats) {
+    const c1 = this.comboLevel >= 1, c2 = this.comboLevel >= 2;
+    if (sec.hats || c1) {
       if (sec.openHat && s % 4 === 2) { this.hat.t = 0; this.hat.amp = 0.5; this.hat.decay = 0.14; }
       else if (s % 2 === 0 || sec.name.startsWith('chorus')) { this.hat.t = 0; this.hat.amp = s % 4 === 0 ? 0.22 : 0.14; this.hat.decay = 0.028; }
+      else if (c1) { this.hat.t = 0; this.hat.amp = 0.13; this.hat.decay = 0.022; } // camada x3: semicolcheias
     }
+    if (c2 && s === 0 && bar % 2 === 0 && !(bar === 0 && sec.crash)) this.trigger(this.crash, 0.3);
     // Baixo em oitavas (colcheias) ou nota longa no break
     const root = key + chord[0];
     if (sec.bass && s % 2 === 0) {
@@ -306,6 +322,18 @@ export class MusicDSP {
       const pool = [...tones, tones[0] + 12, tones[1] + 12];
       const a = this.arpV;
       a.inc = midiHz(pool[song.arp[s % song.arp.length] % pool.length] + 12) / sr; a.t = 0; a.level = 0.09; a.pan = s % 2 ? 0.35 : -0.35;
+    }
+    // Camada x3: segundo arpejo, padrão ao contrário e uma oitava acima, do outro lado do estéreo
+    if (c1) {
+      const pool = [...tones, tones[0] + 12, tones[1] + 12];
+      const a2 = this.arp2, pat = song.arp;
+      a2.inc = midiHz(pool[pat[(pat.length - 1 - (s % pat.length))] % pool.length] + 24) / sr; a2.t = 0; a2.level = 0.12; a2.pan = s % 2 ? -0.5 : 0.5;
+    }
+    // Camada x3: virada de caixa no fim de cada compasso
+    if (c1 && (s === 14 || s === 15) && !fillZone) this.trigger(this.snare, s === 14 ? 0.3 : 0.45);
+    // Camada x5: stabs de metais agudos no 1 e no contratempo do 2 (e brilho nas partes sem melodia)
+    if (c2 && (s === 0 || s === 6)) {
+      for (const n of tones) this.chordOn(n + 12, { attack: 0.004, decay: 0.12, sustain: 0.6, release: 0.12, len: stepSec * (s === 0 ? 2 : 1), cutoff: 7500, level: sec.lead ? 0.07 : 0.1 });
     }
     // Lead: melodia gravada por passo absoluto dentro de um ciclo de 8 compassos
     if (sec.lead) {
@@ -338,6 +366,11 @@ export class MusicDSP {
       if (this.playing && ++this.sampleInStep >= this.stepSamples) { this.sampleInStep -= this.stepSamples; this.step(); }
       if (this.stepInBar < 0 && this.playing) this.step();
       this.intensity += (this.intensityTarget - this.intensity) * 0.00004;
+      // Camadas entram em ~0,3 s e saem em ~0,1 s
+      const want1 = this.comboLevel >= 1 ? 1 : 0, want2 = this.comboLevel >= 2 ? 1 : 0;
+      this.mix1 += (want1 - this.mix1) * (want1 > this.mix1 ? 0.00008 : 0.00025);
+      this.mix2 += (want2 - this.mix2) * (want2 > this.mix2 ? 0.00008 : 0.00025);
+      if (this.drop > 0) this.drop = this.drop < 1e-3 ? 0 : this.drop * 0.99993;
       const noise = rand() * 2 - 1;
       const sec = this.song.sections[this.section];
 
@@ -392,6 +425,16 @@ export class MusicDSP {
         arpL = v * (1 - a.pan) * 0.7; arpR = v * (1 + a.pan) * 0.7;
         a.t += dt; if (env < 1e-3) a.level = 0;
       }
+      // Segundo arpejo (camada x3)
+      const a2 = this.arp2;
+      if (a2.level > 0) {
+        a2.ph += a2.inc; if (a2.ph >= 1) a2.ph -= 1;
+        const env = Math.exp(-a2.t * 14);
+        if ((this.counter & 15) === 0) a2.filter.set(2200 + 7000 * Math.exp(-a2.t * 18), 1.3, sr);
+        const v = a2.filter.lp(pulse(a2.ph, a2.inc, 0.25) + saw(a2.ph, a2.inc) * 0.4) * env * a2.level * this.mix1;
+        arpL += v * (1 - a2.pan) * 0.7; arpR += v * (1 + a2.pan) * 0.7;
+        a2.t += dt; if (env < 1e-3) a2.level = 0;
+      }
       // Lead com glide e vibrato
       const L = this.lead;
       let leadOut = 0;
@@ -399,17 +442,19 @@ export class MusicDSP {
         L.freq += (L.target - L.freq) * 0.0022;
         const vib = 1 + Math.sin(TAU * 5.6 * L.t) * 0.006 * Math.min(1, Math.max(0, (L.t - 0.18) * 4));
         const f = L.freq * vib;
-        const i1 = (f * 1.004) / sr, i2 = (f * 0.996) / sr, i3 = (f * 0.5) / sr;
+        const i1 = (f * 1.004) / sr, i2 = (f * 0.996) / sr, i3 = (f * 0.5) / sr, i4 = (f * 2.003) / sr;
         L.ph1 += i1; if (L.ph1 >= 1) L.ph1 -= 1;
         L.ph2 += i2; if (L.ph2 >= 1) L.ph2 -= 1;
         L.ph3 += i3; if (L.ph3 >= 1) L.ph3 -= 1;
+        L.ph4 += i4; if (L.ph4 >= 1) L.ph4 -= 1;
         const target = L.t < L.gate ? 1 : 0;
         L.env += (target - L.env) * (target ? 0.004 : 0.0012);
         if ((this.counter & 15) === 0) L.filter.set(2400 + 3800 * L.env, 1.1, sr);
         const osc = this.song.leadWave === 'saw'
           ? saw(L.ph1, i1) + saw(L.ph2, i2) + pulse(L.ph3, i3, 0.5) * 0.5
           : pulse(L.ph1, i1, 0.5) + saw(L.ph2, i2) * 0.6 + pulse(L.ph3, i3, 0.25) * 0.4;
-        leadOut = L.filter.lp(osc) * L.env * L.level;
+        const octave = this.mix2 > 0.001 ? saw(L.ph4, i4) * 0.8 * this.mix2 : 0; // camada x5: lead dobrado
+        leadOut = L.filter.lp(osc + octave) * L.env * L.level;
         L.t += dt;
       }
       // Acordes
@@ -457,6 +502,7 @@ export class MusicDSP {
       let filterMul = 1;
       if (sec.filterRise) filterMul = 0.08 + 0.92 * ((this.barInSection * 16 + Math.max(0, this.stepInBar)) / (sec.bars * 16)) ** 2;
       if (sec.filterFall) filterMul = 1 - 0.9 * ((this.barInSection * 16 + Math.max(0, this.stepInBar)) / (sec.bars * 16));
+      if (this.drop > 0) filterMul *= 1 - 0.88 * this.drop; // combo perdido: filtro despenca e volta
       if ((this.counter & 31) === 0) {
         const cut = (600 + 17400 * this.intensity ** 2) * filterMul;
         this.master[0].set(cut, 0.75, sr); this.master[1].set(cut, 0.75, sr);

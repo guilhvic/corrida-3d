@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Estúdio de carros · Corrida 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 12px/1.4 monospace; color: #cfe; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #bar { position: fixed; left: 8px; top: 8px; display: flex; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 16px); }
+    #bar button, #bar select { background: #0b1a18cc; color: #cfe; border: 1px solid #2a5; padding: 3px 7px; font: inherit; cursor: pointer; }
+    #info { position: fixed; left: 8px; bottom: 8px; opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="bar"></div>
+  <div id="info">arraste: girar · roda: zoom · P: PS2 liga/desliga</div>
+  <script type="module" src="./estudio.js"></script>
+</body>
+</html>

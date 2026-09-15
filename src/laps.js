@@ -1,5 +1,6 @@
 // Voltas: contagem com validação por setores e tempo de volta. Grava a trajetória de cada volta (20 Hz);
 // o ranking (ranking.js) guarda as melhores e devolve o fantasma escolhido em `ghost`.
+import { locale } from './i18n.js';
 
 const GHOST_HZ = 20;
 
@@ -104,4 +105,4 @@ export function formatTime(t) {
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
-export const formatPoints = (p) => Math.round(p).toLocaleString('pt-BR');
+export const formatPoints = (p) => Math.round(p).toLocaleString(locale());
