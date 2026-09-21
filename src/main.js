@@ -7,6 +7,8 @@ import { buildWorld } from './world.js';
 import { buildFujimiWorld } from './worldFujimi.js';
 import { buildHakoneWorld } from './worldHakone.js';
 import { createCarModel } from './carModel.js';
+import { DebrisField, shardGeometry } from './debris.js';
+import { CarPreview } from './carPreview.js';
 import { Input } from './input.js';
 import { LapTimer, formatPoints } from './laps.js';
 import { Hud } from './hud.js';
@@ -20,7 +22,8 @@ import { Announcer } from './announcer.js';
 import { DriftDriver } from './ai.js';
 import { loadGarage, garageLook } from './garage.js';
 import { loadRanking, submitLap, pickGhost, unpackGhost } from './ranking.js';
-import { ProfileTracker } from './profile.js';
+import { ProfileTracker, garageUnlocks } from './profile.js';
+import { upgradedParams } from './shop.js';
 import { rewardOf } from './achievements.js';
 import { FreeCamera } from './freeCam.js';
 import { PS2Pipeline } from './ps2.js';
@@ -43,7 +46,7 @@ let mistOn = true;
 try { mistOn = localStorage.getItem('corrida3d.nevoa') !== '0'; } catch { /* sem storage */ }
 
 const STEP = 1 / 240;
-const CAMERAS = ['Perseguição', 'Perseguição distante', 'Capô'];
+const CAMERAS = ['Perseguição', 'Perseguição distante', 'Capô', 'Cockpit'];
 const LOST_REASON = { wall: 'BATEU NA PAREDE', car: 'BATEU NO CARRO', grass: 'FORA DA RUA', spin: 'RODOU' };
 const LAMP_LIGHTS = 6; // luzes dinâmicas reaproveitadas nos postes mais próximos
 
@@ -221,44 +224,210 @@ const rivals = new Rivals(scene, track, envTarget.texture);
 const PLAYER_CSS = '#ffb13b';
 
 // Carro do jogador: acerto próprio + modelo 3D (e o fantasma com a mesma carroceria).
-function setPlayerCar(id, force = false) {
+// state: lataria a aplicar no lugar da salva (o replay remonta o carro como estava na largada)
+function setPlayerCar(id, force = false, state = null) {
   const def = carById(id);
   if (def.id === playerCarId && !force) return;
   playerCarId = def.id;
-  setCarParams(car, def.params);
+  setCarParams(car, upgradedParams(def, profile.profile.upgrades?.[def.id])); // acerto com a preparação do BODYSHOP
   audio.setEngine(def.engine);
   carModel?.dispose();
   ghostModel?.dispose();
-  const look = garageLook(loadGarage(def.id, profile.unlocked));
-  carModel = createCarModel({ design: def.design, look });
+  const look = garageLook(loadGarage(def.id, garageUnlocks(profile.profile)));
+  carModel = createCarModel({ design: def.design, look, breakable: true });
   driftTrail.setColor(look.trail);
   carModel.setEnvMap(envTarget.texture);
   carModel.update(car);
   scene.add(carModel.root);
+  loadCarDamage(def.id, state);
+  warmCrashShaders();
   ghostModel = createCarModel({ design: def.design, ghost: true });
   ghostModel.root.visible = false;
   scene.add(ghostModel.root);
+  carPreview.setCar(def.design, look); // vitrine do menu
 }
+// Vitrine do carro no cartão do singleplayer (contexto WebGL próprio, só desenha nessa tela).
+const carPreview = new CarPreview(document.getElementById('car-preview'));
+// Vitrine do BODYSHOP: o carro em foco, com a peça escolhida já aplicada.
+const shopPreview = new CarPreview(document.getElementById('shop-preview'));
 let showGhost = true;
 
 // Danos do carro do jogador: amassados por batida (frente/traseira/lados) e riscos de raspar a mureta.
+// A lataria fica como ficou: o dano é salvo no perfil e só some pagando o reparo na garagem.
 const damage = { front: 0, rear: 0, left: 0, right: 0, scratchL: 0, scratchR: 0 };
 function resetDamage() { for (const k of Object.keys(damage)) damage[k] = 0; }
-function addDamage(hit, dt, scrape) {
+// Lataria salva do carro atual: zonas, amassados localizados e peças que já foram arrancadas.
+function loadCarDamage(carId, state = null) {
+  resetDamage();
+  const saved = state ?? ProfileTracker.damageOf(profile.profile, carId);
+  if (!saved) return;
+  for (const k of Object.keys(damage)) damage[k] = saved[k] || 0;
+  carModel.setHits(saved.hits || []);
+  for (const name of saved.broken || []) carModel.removeSilently(name);
+}
+function saveCarDamage() {
+  profile.saveDamage(playerCarId, { ...damage, hits: carModel.getHits(), broken: carModel.brokenParts() });
+}
+// c/zones: o carro e a lataria que apanham (o jogador por padrão; os rivais também amassam).
+function addDamage(hit, dt, scrape, c = car, zones = damage) {
   // Ponto de contato no referencial do carro: x+ = esquerda, z+ = frente.
-  const dx = hit.x - car.x, dz = hit.z - car.z;
-  const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
+  const dx = hit.x - c.x, dz = hit.z - c.z;
+  const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw);
   const lz = dx * fx + dz * fz, lx = dx * fz - dz * fx;
   const dent = Math.max(0, hit.speed - 0.9) * 0.09;
   if (dent > 0) {
-    if (Math.abs(lz) > 1.2) damage[lz > 0 ? 'front' : 'rear'] = Math.min(1, damage[lz > 0 ? 'front' : 'rear'] + dent);
-    else damage[lx > 0 ? 'left' : 'right'] = Math.min(1, damage[lx > 0 ? 'left' : 'right'] + dent * 0.8);
+    if (Math.abs(lz) > 1.2) zones[lz > 0 ? 'front' : 'rear'] = Math.min(1, zones[lz > 0 ? 'front' : 'rear'] + dent);
+    else zones[lx > 0 ? 'left' : 'right'] = Math.min(1, zones[lx > 0 ? 'left' : 'right'] + dent * 0.8);
   }
   if (scrape && Math.abs(lz) <= 2.0) {
     const key = lx > 0 ? 'scratchL' : 'scratchR';
-    damage[key] = Math.min(1, damage[key] + car.speed * dt * 0.012 + dent * 0.5);
+    zones[key] = Math.min(1, zones[key] + c.speed * dt * 0.012 + dent * 0.5);
   }
 }
+
+// --- Batidas: amassado no ponto, peças que soltam e destroços ------------------------------------------
+const debris = new DebrisField(scene);
+debris.groundAt = (x, z) => groundAt(track, nearestIndex(track, x, z, idx, 40), x, z);
+let crashCooldown = 0; // s: o contato dura vários quadros; uma batida forte vale uma vez
+const shardMats = {
+  glass: new THREE.MeshBasicMaterial({ color: 0xcfe6ff, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
+  red: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 0.12, 0.1), transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+};
+const tmpV = new THREE.Vector3();
+
+// Joga um pedaço para longe do carro: segue o embalo, sai na direção da batida e sobe um pouco.
+// pose: o carro de verdade na corrida, ou o carro gravado no replay (x, z, y, vx, vz).
+function fling(object, radius, hit, speed, pose, spread = 1) {
+  const up = 1.2 + speed * 0.1 + Math.random() * 1.5;
+  const push = (1.2 + speed * 0.14) * (0.6 + Math.random() * 0.8);
+  const v = new THREE.Vector3(
+    pose.vx * 0.7 + hit.nx * push + (Math.random() - 0.5) * 2.5 * spread,
+    up,
+    pose.vz * 0.7 + hit.nz * push + (Math.random() - 0.5) * 2.5 * spread,
+  );
+  const w = new THREE.Vector3((Math.random() - 0.5) * 18, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 18);
+  debris.add(object, { velocity: v, spin: w, radius });
+}
+
+// Lascas de pintura ou cacos de vidro no ponto da batida.
+function shards(hit, speed, count, material, pose, size = 0.12) {
+  for (let i = 0; i < count; i++) {
+    const m = new THREE.Mesh(shardGeometry(size * (0.5 + Math.random())), material);
+    m.position.set(hit.x, (pose.y || 0) + 0.35 + Math.random() * 0.4, hit.z);
+    m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    fling(m, 0.02, hit, speed * 0.8, pose, 1.6);
+  }
+}
+
+// Decide o que uma batida faz (amassado, peças, faróis, lanternas) sem mexer em nada ainda: o mesmo
+// evento serve para a corrida e para o replay, que reaplica as batidas no tempo em que aconteceram.
+// hit: { x, z, nx, nz } no mundo (normal saindo da parede/do outro carro, na direção do nosso).
+// who: 0 = jogador, k = k-ésimo rival (a batida dele também vai para o replay).
+function crashEvent(hit, speed, c = car, model = carModel, zones = damage, who = 0) {
+  const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw);
+  const dx = hit.x - c.x, dz = hit.z - c.z;
+  const lz = dx * fx + dz * fz, lx = dx * fz - dz * fx;
+  // Normal no referencial do carro, sempre apontando para dentro dele (é para lá que a chapa afunda).
+  let nlx = hit.nx * fz - hit.nz * fx, nlz = hit.nx * fx + hit.nz * fz;
+  if (nlx * -lx + nlz * -lz < 0) { nlx = -nlx; nlz = -nlz; }
+  const len = Math.hypot(nlx, nlz) || 1;
+
+  // De lado é pela direção da batida, não só pelo ponto: deslizando de lado contra a mureta o contato
+  // mais forte costuma cair na quina, mas quem apanha é a porta.
+  const lateral = Math.abs(nlx) > Math.abs(nlz) * 1.2;
+  const front = !lateral && lz > 1.2, rear = !lateral && lz < -1.3, side = lateral || Math.abs(lz) < 1.15;
+  const partZ = lateral ? Math.max(-1.1, Math.min(1.1, lz)) : lz;
+  const parts = [];
+  // Peças pequenas perto do ponto: quanto mais longe, mais forte precisa ser a batida.
+  for (const b of model.breakablesNear({ x: lx, z: partZ }, 1.1 + speed * 0.03)) {
+    if (speed > b.hp * 3 + b.distance * 4) parts.push(b.name);
+  }
+  // Painéis: para-choque numa batida firme, capô só de frente e forte, porta numa batida de lado.
+  if (front && (speed > 9 || (zones.front > 0.8 && speed > 5))) parts.push('para-choque-diant');
+  if (front && speed > 14) parts.push('capo');
+  if (rear && (speed > 9 || (zones.rear > 0.8 && speed > 5))) parts.push('para-choque-tras');
+  if (side && speed > 11) parts.push(lx > 0 ? 'porta-esq' : 'porta-dir');
+  return {
+    t: recorder.duration,
+    who,
+    hit: { x: hit.x, z: hit.z, nx: hit.nx, nz: hit.nz },
+    speed,
+    dent: {
+      local: { x: lx, y: 0.55, z: lz }, dir: { x: nlx / len, y: -0.08, z: nlz / len },
+      depth: Math.min(0.16, (speed - 2) * 0.012 + 0.01), radius: Math.min(0.95, 0.3 + speed * 0.035),
+    },
+    parts,
+    // Farol do lado que bateu (os escamoteáveis saem como peça; os fixos só apagam e quebram o vidro)
+    headlight: front && speed > 7 ? (lx > 0 ? 'farol-esq' : 'farol-dir') : null,
+    rearLamps: rear && speed > 6,
+    frontGlass: front && speed > 7,
+    zones: null,
+  };
+}
+
+// Aplica um evento de batida no carro: amassa, solta peças, quebra faróis e lanternas e espalha cacos.
+// live: na corrida (com som e aviso); no replay só o visual.
+function applyCrash(ev, pose, live, model = carModel) {
+  model.addHit(ev.dent.local, ev.dent.dir, ev.dent.depth, ev.dent.radius);
+  let lost = 0, glass = 0;
+  for (const name of ev.parts) {
+    const piece = model.detach(name);
+    if (!piece) continue;
+    fling(piece.object, piece.radius, ev.hit, ev.speed, pose);
+    lost++;
+  }
+  if (ev.headlight && model.breakHeadlight(ev.headlight)) glass++;
+  if (ev.rearLamps && model.breakRearLamps()) { shards(ev.hit, ev.speed, 8, shardMats.red, pose, 0.07); glass++; }
+  if (ev.frontGlass) { shards(ev.hit, ev.speed, 5, shardMats.glass, pose, 0.06); glass++; }
+  // Lascas de pintura em toda batida forte.
+  shards(ev.hit, ev.speed, Math.min(10, Math.floor(ev.speed / 2.5)), model.shardMaterial, pose, 0.1);
+  if (!live) return;
+  // Vidro de rival quebrando: mais baixo quanto mais longe da câmera.
+  const near = ev.who ? Math.max(0, 1 - Math.hypot(ev.hit.x - camera.position.x, ev.hit.z - camera.position.z) / 40) : 1;
+  if (glass && near > 0) audio.glass(Math.min(1, ev.speed / 14) * near);
+  if (lost && !ev.who) hud.toast(t(lost > 1 ? '{n} peças arrancadas' : 'Peça arrancada', { n: lost }), 'bad', 1400);
+}
+
+// Batidas da corrida atual (o replay reaplica) e como o carro estava na largada.
+let crashLog = [];
+let raceStartCar = null;
+const carState = () => ({ ...damage, hits: carModel.getHits(), broken: carModel.brokenParts() });
+
+// Pré-compila os shaders que só aparecem numa batida (cacos, painel arrancado, cofre do motor): sem isso a
+// primeira batida da corrida dá um soluço enquanto a placa de vídeo compila.
+function warmCrashShaders() {
+  if (!carModel || typeof renderer === 'undefined') return;
+  const undo = carModel.warmup();
+  const temp = new THREE.Group();
+  for (const m of [shardMats.glass, shardMats.red, carModel.shardMaterial]) temp.add(new THREE.Mesh(shardGeometry(0.05), m));
+  temp.position.set(car.x, (car.y || 0) - 50, car.z); // fora da vista
+  scene.add(temp);
+  try { renderer.compile(scene, camera); } catch { /* compila na hora, como antes */ }
+  temp.removeFromParent();
+  temp.traverse((o) => o.geometry?.dispose());
+  undo();
+}
+
+function crash(hit, speed, who = 0) {
+  const e = who ? rivals.list[who - 1] : null;
+  const c = e ? e.car : car, model = e ? e.model : carModel, zones = e ? e.zones : damage;
+  const ev = crashEvent(hit, speed, c, model, zones, who);
+  ev.zones = { ...zones }; // zonas de amassado/risco depois desta batida (o replay as recoloca)
+  applyCrash(ev, c, true, model);
+  crashLog.push(ev);
+}
+
+// Batidas dos rivais do quadro: amassam, soltam peças e entram no replay (uma forte por vez, como o jogador).
+function rivalCrashes(simDt) {
+  rivals.list.forEach((e, i) => {
+    e.crashCooldown = Math.max(0, e.crashCooldown - simDt);
+    const hits = [e.wallHit, e.carHit].filter(Boolean);
+    for (const h of hits) addDamage(h, simDt, h === e.wallHit || h.speed < 3, e.car, e.zones);
+    const worst = hits.sort((p, q) => q.speed - p.speed)[0];
+    if (worst && worst.speed > 2.2 && e.crashCooldown <= 0) { crash(worst, worst.speed, i + 1); e.crashCooldown = 0.25; }
+  });
+}
+const NO_DAMAGE = { front: 0, rear: 0, left: 0, right: 0, scratchL: 0, scratchR: 0 };
 
 var skids = new SkidMarks(scene); // var: applyAtmosphere roda antes desta linha na montagem inicial
 skids.setWet(!!world.atmosphere.rain);
@@ -285,6 +454,7 @@ function startReplay() {
   replay.playing = true;
   replay.t = 0;
   replay.proxies = recorder.data.map(() => ({}));
+  rewindReplayCar();
   director.reset();
   driftTrail.clear();
   ghostModel.root.visible = false;
@@ -299,9 +469,22 @@ function groundPose(p) {
   return p;
 }
 
+// Replay: o carro volta a como estava na largada e as batidas acontecem de novo no tempo certo.
+function rewindReplayCar() {
+  debris.clear();
+  if (raceStartCar) setPlayerCar(playerCarId, true, raceStartCar);
+  rivals.repairAll();
+  replay.crashIdx = 0;
+  replay.zones = { ...(raceStartCar ?? damage) };
+  replay.rivalZones = {};
+}
+
 function stopReplay() {
   if (!replay.playing) return;
   replay.playing = false;
+  // Fim do replay: o carro volta a como terminou a corrida (é o que está salvo no perfil).
+  debris.clear();
+  setPlayerCar(playerCarId, true);
   replayTag.hidden = true;
   if (camera.view?.enabled) { camera.clearViewOffset(); camera.updateProjectionMatrix(); }
   driftTrail.clear();
@@ -309,7 +492,7 @@ function stopReplay() {
 
 function updateReplay(dt) {
   replay.t += dt;
-  if (replay.t >= recorder.duration) { replay.t = 0; driftTrail.clear(); director.reset(); }
+  if (replay.t >= recorder.duration) { replay.t = 0; driftTrail.clear(); director.reset(); rewindReplayCar(); }
   const [me, ...others] = replay.proxies;
   recorder.sample(0, replay.t, me);
   groundPose(me);
@@ -323,6 +506,13 @@ function updateReplay(dt) {
     e.model.setDetail(d < 28);
     e.label.visible = false;
   });
+  while (replay.crashIdx < crashLog.length && crashLog[replay.crashIdx].t <= replay.t) {
+    const ev = crashLog[replay.crashIdx++];
+    const rival = ev.who ? rivals.list[ev.who - 1] : null;
+    if (ev.who && (!rival || !others[ev.who - 1])) continue;
+    applyCrash(ev, rival ? others[ev.who - 1] : me, false, rival ? rival.model : carModel);
+    if (rival) replay.rivalZones[ev.who] = ev.zones; else replay.zones = ev.zones;
+  }
   // Fumaça das rodas traseiras gravada
   for (const p of replay.proxies) {
     if (!(p.skid > 0.25) || p.speed < 3) continue;
@@ -347,7 +537,7 @@ const announcer = new Announcer();
 const unlockAudio = () => { audio.start(); if (audio.ctx) audio.suspend(race.phase === 'menu' || paused); };
 addEventListener('pointerdown', unlockAudio, { once: true });
 addEventListener('keydown', unlockAudio, { once: true });
-audio.onSong = (song) => hud.toast(`♪ ${song.name} · ${song.bpm} BPM`, 'info', 2600);
+// A troca de música não avisa em tela (só a tecla K, quando é o jogador que liga a trilha).
 audio.setRain(!!world.atmosphere.rain);
 let padName = null;
 const input = new Input({
@@ -388,6 +578,10 @@ let shake = 0;
 const camTarget = new THREE.Vector3();
 const tmp = new THREE.Vector3();
 const lerpAngle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
+const cockpitQuat = new THREE.Quaternion();
+const cockpitLook = new THREE.Quaternion();
+const cockpitEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+let cockpitSlip = 0; // em drift o piloto olha um pouco para onde o carro vai
 
 // Órbita livre: analógico direito (ou arrastar com o mouse) gira 360° em volta do carro e sobe/desce.
 // A câmera fica onde foi deixada e volta para trás do carro 1,5 s depois de soltar, se o carro estiver andando.
@@ -421,7 +615,17 @@ function updateCamera(dt, rumble) {
   if (window.game?.freeCamera) return; // depuração: câmera posicionada pelo console
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
   const cy = car.y || 0, slope = Math.tan(car.pitch || 0);
-  if (camMode === 2) {
+  if (camMode === 3 && carModel && !garageView) {
+    // Cockpit: nos olhos do piloto, com a rolagem e a arfagem da carroceria; a órbita vira "olhar em volta".
+    carModel.root.updateMatrixWorld(true);
+    carModel.eye.getWorldPosition(camera.position);
+    carModel.body.getWorldQuaternion(cockpitQuat);
+    const slip = car.speed > 4 && car.u > 0 ? Math.atan2(Math.sin(Math.atan2(car.vx, car.vz) - car.yaw), Math.cos(Math.atan2(car.vx, car.vz) - car.yaw)) : 0;
+    cockpitSlip += (THREE.MathUtils.clamp(slip * 0.45, -0.5, 0.5) - cockpitSlip) * (1 - Math.exp(-dt * 4));
+    cockpitEuler.set(-0.06 + orbit.pitch * 0.6, Math.PI + orbit.yaw + cockpitSlip, 0);
+    camera.quaternion.copy(cockpitQuat).multiply(cockpitLook.setFromEuler(cockpitEuler));
+    camera.fov = 66 + config.fov;
+  } else if (camMode === 2) {
     // No capô a órbita vira "olhar em volta".
     const lookYaw = car.yaw + orbit.yaw;
     camera.position.set(car.x + fx * 0.9, cy + 1.08 + slope * 0.9, car.z + fz * 0.9);
@@ -473,6 +677,7 @@ function switchTrack(id, time) {
   if (!needsWorld(id, time)) return;
   const trackChanged = createWorld(id, time);
   audio.setRain(!!world.atmosphere.rain);
+  audio.setAmbience(trackId, timeId); // cigarras, vento, guindaste... conforme a pista e o horário
   captureEnv();
   if (!trackChanged) return; // só mudou o horário
   timer.setTrack(track);
@@ -482,6 +687,7 @@ function switchTrack(id, time) {
   rivals.setTrack(track);
   applyRanking();
   skids.clear();
+  debris.clear();
   placeOnGrid();
 }
 
@@ -513,7 +719,8 @@ function applyRanking() {
 function resetRaceState() {
   stopReplay();
   recorder.reset(0);
-  resetDamage();
+  crashLog = [];
+  raceStartCar = carState();
   race.rankBest = 0;
   scorer.resetRace();
   judge.reset();
@@ -521,6 +728,7 @@ function resetRaceState() {
   timer.startAt(idx);
   applyRanking();
   skids.clear();
+  debris.clear();
   hud.countdown('');
   race.time = 0;
   race.results = [];
@@ -548,7 +756,7 @@ function beginRace(settings) {
   resetRaceState();
   car.automatic = config.gearbox === 'auto';
   if (car.automatic && car.gear === 0) car.gear = 1;
-  if (profile.race) profile.abandon();
+  if (profile.race) { saveCarDamage(); profile.abandon(); } // batida de corrida abandonada também fica na lataria
   profile.startRace({ track: trackId, time: timeId, car: playerCarId, laps: race.laps, racers: race.racers, difficulty });
   raceAchievements.length = 0;
   menu.hide();
@@ -605,7 +813,7 @@ function resumeGame() {
 }
 
 function quitToMenu() {
-  if (profile.race) profile.abandon();
+  if (profile.race) { saveCarDamage(); profile.abandon(); } // batida de corrida abandonada também fica na lataria
   if (race.phase === 'intro') startCountdown();
   announcer.stop();
   race.phase = 'menu';
@@ -625,16 +833,25 @@ function finishRace() {
 
 function showResults() {
   paused = true;
-  startReplay();
   audio.suspend(true);
   rivals.bankAll();
   const finalStandings = rivals.standings({ ...playerRow(), points: scorer.total, finished: true });
-  profile.finish({ position: finalStandings.findIndex((r) => r.player) + 1, racers: finalStandings.length, total: scorer.total });
+  const position = finalStandings.findIndex((r) => r.player) + 1;
+  profile.finish({ position, racers: finalStandings.length, total: scorer.total });
+  // Prêmio em ¥ e a lataria como ficou: o conserto é pago na garagem.
+  const prize = ProfileTracker.prize({ total: scorer.total, position, racers: finalStandings.length });
+  profile.earn(prize);
+  saveCarDamage();
+  profile.save();
+  const repair = ProfileTracker.repairCost({ ...damage, broken: carModel.brokenParts() });
+  // O replay só começa depois de salvar: ele rebobina o carro para como estava na largada.
+  startReplay();
   announceAchievements();
   menu.showResults({
     achievements: [...raceAchievements],
     laps: race.results, total: scorer.total, bestCombo: scorer.best, time: race.time, difficulty, bestLap: race.bestLap, grades: { ...judge.counts }, rankBest: race.rankBest,
     standings: rivals.standings({ ...playerRow(), points: scorer.total, finished: true }),
+    prize, repair,
   });
 }
 
@@ -706,6 +923,30 @@ const menu = new Menu({
   onConfig: (cfg) => applyConfig(cfg),
   // Garagem: remonta o carro com o visual novo; na tela da garagem os rivais somem e a câmera chega perto.
   onGarage: (carId) => setPlayerCar(carId, true),
+  // Bipe do menu (o áudio só existe depois do primeiro gesto do jogador; antes disso fica mudo)
+  onNav: (kind) => audio.uiBlip(kind),
+  // BODYSHOP: paga e entrega. Preparação no carro atual vale na hora (física e ficha).
+  onBuy: (item) => {
+    if (!profile.spend(item.price)) return false;
+    if (item.kind === 'car') profile.giveCar(item.id);
+    if (item.kind === 'upgrade') profile.setUpgrade(item.car, item.id, item.level + 1);
+    if (item.kind === 'part') profile.giveItem(item.key);
+    profile.save();
+    if (item.kind === 'upgrade' && item.car === playerCarId) setCarParams(car, upgradedParams(carById(playerCarId), profile.profile.upgrades[playerCarId]));
+    audio.start();
+    return true;
+  },
+  onShopPreview: (carId, look) => shopPreview.setCar(carById(carId).design, look ? garageLook(look) : garageLook(loadGarage(carId, garageUnlocks(profile.profile)))),
+  // Garagem: paga o conserto e a lataria volta ao zero.
+  onRepair: (cost) => {
+    if (!profile.spend(cost)) return false;
+    resetDamage();
+    profile.saveDamage(playerCarId, { ...damage, hits: [], broken: [] });
+    profile.save();
+    setPlayerCar(playerCarId, true); // remonta: peças arrancadas voltam
+    debris.clear();
+    return true;
+  },
   onScreen: (name) => {
     garageView = name === 'garage';
     for (const e of rivals.list) e.model.root.visible = !garageView;
@@ -729,10 +970,25 @@ function applyConfig(cfg) {
   if (resolutionChanged) { pipeline.targetHeight = cfg.resolution; pipeline.setSize(innerWidth, innerHeight); }
   showGhost = cfg.ghost;
   hud.setOptions({ units: cfg.units, fps: cfg.fps, minimap: cfg.minimap, grades: cfg.grades });
+  document.body.style.setProperty('--hud-scale', cfg.hudScale); // tamanho dos painéis na corrida
   input.rumbleEnabled = cfg.rumble;
   driftTrail.enabled = cfg.driftTrail;
   rivals.showNames = cfg.names;
+  setFullscreen(cfg.fullscreen);
 }
+
+// Tela cheia: o navegador só deixa entrar a partir de um gesto do jogador (tecla F11 ou clique no menu);
+// fora disso o pedido é recusado em silêncio e a opção volta sozinha pelo fullscreenchange.
+function setFullscreen(on) {
+  if (!!document.fullscreenElement === on) return;
+  // Recusado (sem gesto ou bloqueado pela página que hospeda o jogo): a opção volta para DESLIGADO.
+  if (on) document.documentElement.requestFullscreen?.().catch(() => menu.setConfig({ fullscreen: false }));
+  else document.exitFullscreen?.().catch(() => { /* já saiu */ });
+}
+addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  if (config.fullscreen !== on) menu.setConfig({ fullscreen: on });
+});
 // Troca de idioma: menus e textos gerados de novo (o HTML fixo é traduzido pelo i18n.js)
 onLangChange(() => {
   if (menu.visible) menu.render();
@@ -793,6 +1049,12 @@ let rumble = false;
 function handleActions() {
   const a = input.consumeActions();
   if (a.debug) debug.toggle();
+  // Tela cheia vale em qualquer tela (o menu e a pausa saem antes do resto dos atalhos).
+  if (a.fullscreen) {
+    const on = !document.fullscreenElement;
+    menu.setConfig({ fullscreen: on });
+    hud.toast(t(on ? 'Tela cheia' : 'Em janela'), 'info', 1000);
+  }
   if (a.music) {
     audio.start();
     menu.setConfig({ musicOn: !config.musicOn });
@@ -939,6 +1201,7 @@ function simulate(dt, demoMode = false) {
     else if (ev.best && ev.lap > 1) announcer.say('bestLap', { priority: 1 });
   }
 
+  if (!demoMode) rivalCrashes(simDt);
   rivals.score(simDt, race.laps, race.phase === 'running');
   rivals.effects(simDt, skids, particles, camera);
 
@@ -953,6 +1216,11 @@ function simulate(dt, demoMode = false) {
   // Batida / raspão na parede
   if (impact && !demoMode) addDamage(impact, simDt, true);
   if (carHit && carHit.speed > 0.5 && !demoMode) addDamage({ ...carHit, x: carHit.x, z: carHit.z }, simDt, carHit.speed < 3);
+  crashCooldown = Math.max(0, crashCooldown - simDt);
+  if (!demoMode && crashCooldown <= 0) {
+    const worst = impact && (!carHit || impact.speed >= carHit.speed) ? impact : carHit;
+    if (worst && worst.speed > 2.2) { crash(worst, worst.speed); crashCooldown = 0.25; }
+  }
   if (impact) {
     const strength = impact.speed;
     if (strength > 0.6) {
@@ -1034,7 +1302,6 @@ function startDemo() {
   if (car.gear < 1) car.gear = 1;
   demo.driver = new DriftDriver(car, track, { skill: 0.95, lane: 0, seed: 1 + Math.floor(Math.random() * 9999) });
   demo.scorer.resetRace();
-  resetDamage();
   skids.clear();
   driftTrail.clear();
   director.setTrack(track);
@@ -1044,7 +1311,6 @@ function stopDemo() {
   demo.active = false;
   setDifficulty(difficulty);
   placeOnGrid();
-  resetDamage();
   skids.clear();
   driftTrail.clear();
   if (camera.view?.enabled) { camera.clearViewOffset(); camera.updateProjectionMatrix(); }
@@ -1070,8 +1336,21 @@ function frame(now) {
     driftTrail.update((paused && !demo.active) || freeCam.active ? 0 : dt, car, carModel.tailLights, demo.active ? demo.scorer : scorer, camera);
     rivals.updateVisuals(camera);
   }
-  carModel.setDamage(damage);
+  carModel.setDamage(replay.playing && replay.zones ? replay.zones : damage);
+  rivals.list.forEach((e, i) => e.model.setDamage(replay.playing ? (replay.rivalZones?.[i + 1] ?? NO_DAMAGE) : e.zones));
+  debris.update(paused && !replay.playing ? 0 : dt);
+  // A vitrine do menu só gira enquanto a tela do singleplayer está à vista.
+  if (menu.visible && menu.current === 'single') carPreview.update(dt);
+  if (menu.visible && menu.current === 'bodyshop') shopPreview.update(dt);
   if (!paused && !freeCam.active) audio.updateRivals(rivals.list, camera, dt);
+  // Ambiente: o sino toca enquanto o trem de Fujimi passa perto, e o eco cresce entre os muros de Hakone.
+  if (!paused) {
+    const tr = world?.train;
+    const trainNear = tr ? Math.max(0, 1 - Math.hypot(tr.x - car.x, tr.z - car.z) / 220) : 0;
+    audio.updateAmbience(dt, { train: trainNear });
+    // Hakone corre entre muros de pedra: sempre tem um eco de fundo, e ele cresce quando o carro encosta.
+    audio.setEcho(trackId === 'hakone' ? 0.35 + 0.65 * Math.max(0, 1 - wallDistance() / 4) : 0);
+  }
   const pose = showGhost && !replay.playing ? timer.ghostPose() : null;
   ghostModel.root.visible = !!pose;
   if (pose) {
@@ -1104,7 +1383,7 @@ function frame(now) {
   fogUniforms.uFogTime.value = now / 1000;
   debugInfo.fps = fps;
   debug.update(dt, debugInfo);
-  hud.update(car, timer, scorer, { fps, ghost: pose, padName, difficulty: t(DIFFICULTIES[difficulty].label), totalLaps: race.laps, rivals: rivals.list });
+  hud.update(car, timer, scorer, { fps, ghost: pose, padName, totalLaps: race.laps, rivals: rivals.list });
   race.standingsTimer -= dt;
   if (race.standingsTimer <= 0) {
     race.standingsTimer = 0.25;
@@ -1138,7 +1417,7 @@ async function loadCustomCar() {
 loadCustomCar();
 
 // Acesso pelo console para depuração e ajuste de acerto (ex.: game.CAR.counterSteer = 0.7).
-window.game = { frame: (now) => frame(now), car, damage, profile, announcer, demo, get intro() { return intro; }, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
+window.game = { frame: (now) => frame(now), get carModel() { return carModel; }, debris, car, damage, profile, announcer, demo, get intro() { return intro; }, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
 
 // Posiciona a câmera antes do primeiro frame para não "voar" até o carro.
 camera.position.set(car.x - Math.sin(car.yaw) * 6.6, 2.4, car.z - Math.cos(car.yaw) * 6.6);

@@ -24,9 +24,9 @@ export function gridSlot(track, i, lane = null) {
 export const RIVALS = [
   { name: 'KENJI', car: 'seiran', color: 0xe8e8e8, skill: 0.95 },
   { name: 'AYA', car: 'tsubame', color: 0x1c4fb0, skill: 0.9 },
-  { name: 'RYO', car: 'kaze180', color: 0x111214, skill: 0.85 },
+  { name: 'RYO', car: 'kaminari86', color: 0xe8e8e3, skill: 0.85 },
   { name: 'MIKA', car: 'seiran', color: 0xe0a000, skill: 0.8 },
   { name: 'TAKU', car: 'kaze180', color: 0x1f7a3a, skill: 0.75 },
   { name: 'YUI', car: 'tsubame', color: 0xd94f9a, skill: 0.7 },
-  { name: 'SHO', car: 'seiran', color: 0x7a7f88, skill: 0.65 },
+  { name: 'SHO', car: 'kaze180', color: 0x111214, skill: 0.65 },
 ];

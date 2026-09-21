@@ -59,16 +59,37 @@ export class Rivals {
     if (!this.pool[i]) {
       const def = RIVALS[i];
       const carDef = carById(def.car);
-      const model = createCarModel({ design: carDef.design, color: def.color, headlight: false, envMap: this.envMap });
+      const model = createCarModel({ design: carDef.design, color: def.color, headlight: false, envMap: this.envMap, breakable: true });
       model.setEnvMap(this.envMap);
       const label = nameSprite(def.name, def.color);
       model.root.add(label);
       this.scene.add(model.root);
       const car = createCar();
       setCarParams(car, carDef.params);
-      this.pool[i] = { ...def, engine: carDef.engine, css: hex(def.color === 0x111214 ? 0x9aa0a8 : def.color), car, model, label, idx: 0, driver: null, scorer: new DriftScorer(), timer: null, wallImpact: 0, carImpact: 0, finished: false };
+      this.pool[i] = { ...def, carId: def.car, engine: carDef.engine, css: hex(def.color === 0x111214 ? 0x9aa0a8 : def.color), car, model, label, idx: 0, driver: null, scorer: new DriftScorer(), timer: null, wallImpact: 0, carImpact: 0, finished: false,
+        zones: { front: 0, rear: 0, left: 0, right: 0, scratchL: 0, scratchR: 0 }, wallHit: null, carHit: null, crashCooldown: 0 };
     }
     return this.pool[i];
+  }
+
+  // Rival batido volta inteiro para a próxima corrida (e para o começo do replay): modelo novo, lataria zerada.
+  repair(e) {
+    e.zones = { front: 0, rear: 0, left: 0, right: 0, scratchL: 0, scratchR: 0 };
+    if (!e.model.brokenParts().length && !e.model.getHits().length) return;
+    const visible = e.model.root.visible;
+    e.label.removeFromParent(); // o sprite do nome é reaproveitado (a geometria dele é compartilhada)
+    e.model.dispose();
+    const carDef = carById(e.carId);
+    e.model = createCarModel({ design: carDef.design, color: e.color, headlight: false, envMap: this.envMap, breakable: true });
+    e.model.setEnvMap(this.envMap);
+    e.model.root.add(e.label);
+    e.model.root.visible = visible;
+    this.scene.add(e.model.root);
+    e.model.update(e.car);
+  }
+
+  repairAll() {
+    for (const e of this.list) this.repair(e);
   }
 
   // Coloca `count` rivais no grid (posições 0..count-1); o jogador larga atrás deles.
@@ -89,6 +110,7 @@ export class Rivals {
       e.timer = new LapTimer(this.track, { persist: false });
       e.timer.startAt(slot.idx);
       e.finished = false;
+      this.repair(e);
       e.model.root.visible = true;
       e.model.update(e.car);
       this.list.push(e);
@@ -111,12 +133,22 @@ export class Rivals {
       e.idx = nearestIndex(this.track, e.car.x, e.car.z, e.idx);
       followGround(e.car, this.track, e.idx);
       const hit = collideWalls(e.car, this.track, e.idx);
-      if (hit) e.wallImpact = Math.max(e.wallImpact, hit.speed);
+      if (hit) {
+        e.wallImpact = Math.max(e.wallImpact, hit.speed);
+        if (!e.wallHit || hit.speed > e.wallHit.speed) e.wallHit = hit;
+      }
     }
     // Contatos: índice 0 é o jogador.
     const contacts = collideCars(cars);
     for (const c of contacts) {
-      for (const k of [c.a, c.b]) if (k > 0) this.list[k - 1].carImpact = Math.max(this.list[k - 1].carImpact, c.speed);
+      for (const k of [c.a, c.b]) {
+        if (k <= 0) continue;
+        const e = this.list[k - 1];
+        e.carImpact = Math.max(e.carImpact, c.speed);
+        // A normal do contato aponta para o carro a; para o b ela vira.
+        const s = k === c.a ? 1 : -1;
+        if (!e.carHit || c.speed > e.carHit.speed) e.carHit = { ...c, nx: c.nx * s, nz: c.nz * s };
+      }
     }
     return contacts;
   }
@@ -139,6 +171,8 @@ export class Rivals {
       e.scorer.events.length = 0;
       e.wallImpact = 0;
       e.carImpact = 0;
+      e.wallHit = null;
+      e.carHit = null;
     }
   }
 

@@ -3,7 +3,8 @@
 // Mesmo espírito PS2 dos outros mapas: texturas pequenas, luz "pintada" e poucos draw calls (mergeStatic no final).
 import * as THREE from 'three';
 import { ROAD_HALF_WIDTH, WALL_OFFSET } from './track.js';
-import { countryRoadTextures, tireMarksTexture, roadWordTexture } from './textures.js';
+import { buildTreeField, buildUndergrowth, buildTufts, buildRocks } from './trees.js';
+import { groundTextures, countryRoadTextures, tireMarksTexture, roadWordTexture } from './textures.js';
 import { mulberry32, canvasTexture, noise, mergeStatic, disposeTree, glowTexture, vendingTexture, JP_FONT } from './world.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z).normalize();
@@ -320,11 +321,9 @@ export function buildHakoneWorld(scene, track, { time = 'neblina' } = {}) {
   cloudSea.userData.dynamic = true;
 
   // --- Relevo em malha (fora do barranco modelado) --------------------------------------------------------------
-  const grassTex = canvasTexture(64, 64, (ctx, w, h) => {
-    noise(ctx, w, h, '#d6d6cc', 0.35, 1400, rand, 2);
-    for (let i = 0; i < 70; i++) { ctx.fillStyle = `rgba(40,50,20,${0.1 + rand() * 0.2})`; ctx.fillRect(rand() * w, rand() * h, 1, 3); }
-  });
-  const terrainMat = new THREE.MeshLambertMaterial({ map: grassTex, vertexColors: true });
+  // Chão da serra: capim, terra e pedrinhas com relevo, mais folha seca caída (outono).
+  const groundMaps = groundTextures(73, { leaves: 1 });
+  const terrainMat = new THREE.MeshLambertMaterial({ ...groundMaps, vertexColors: true });
   {
     const HALF = 900, STEP = 10, cols = Math.round((HALF * 2) / STEP) + 1;
     const pos = [], uv = [], idx = [], col = [];
@@ -337,7 +336,7 @@ export function buildHakoneWorld(scene, track, { time = 'neblina' } = {}) {
       let h = g.h;
       if (g.inside) h = g.d < W + 10 ? Y[g.j] - 1.2 : h - 0.5;
       pos.push(px, h, pz);
-      uv.push(px / 10, pz / 10);
+      uv.push(px / 8, pz / 8);
       c.copy(field).lerp(forest, smoothstep(0.35, 0.6, fbm(px * 0.01 + 2, pz * 0.01, 3)));
       c.lerp(rock, smoothstep(90, 200, h) * 0.6);
       col.push(c.r, c.g, c.b);
@@ -412,11 +411,9 @@ export function buildHakoneWorld(scene, track, { time = 'neblina' } = {}) {
   stoneTex.repeat.set(1, 1);
   const capTex = canvasTexture(32, 32, (ctx, w, h) => { noise(ctx, w, h, '#a9a69c', 0.3, 300, rand, 1); ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(0, 0, 1, h); });
   const capMat = new THREE.MeshLambertMaterial({ map: capTex, side: THREE.DoubleSide });
-  const bankTex = canvasTexture(64, 64, (ctx, w, h) => {
-    noise(ctx, w, h, '#5d6a3a', 0.45, 1600, rand, 2);
-    for (let i = 0; i < 120; i++) { ctx.fillStyle = `rgba(${20 + rand() * 40},${40 + rand() * 40},${10 + rand() * 20},0.7)`; ctx.fillRect(rand() * w, rand() * h, 1 + rand() * 2, 2 + rand() * 4); }
-  });
-  const bankMat = new THREE.MeshLambertMaterial({ map: bankTex, color: 0x6f7f5a, side: THREE.DoubleSide });
+  // Barranco: é o chão que passa mais perto da câmera, então leva a textura cheia (capim, terra, pedra e folha).
+  const bankMaps = groundTextures(77, { leaves: 0.6 });
+  const bankMat = new THREE.MeshLambertMaterial({ ...bankMaps, color: 0x6f7f5a, side: THREE.DoubleSide });
   for (const S of sides) {
     const sd = S.sd;
     // Face do muro (com leve inclinação) e topo
@@ -584,8 +581,8 @@ export function buildHakoneWorld(scene, track, { time = 'neblina' } = {}) {
   }
 
   // --- Árvores: cedros cobrindo a encosta, bordos (momiji) junto da estrada --------------------------------------
-  const cedarBase = [], mapleBase = [];
-  let cedarLower, cedarUpper, mapleCrown;
+  const cedarBase = [], mapleBase = [], bushBase = [];
+  let cedarField, mapleField, bushField;
   {
     const cedars = [], maples = [];
     const roadClear = (px, pz, gap) => {
@@ -620,45 +617,68 @@ export function buildHakoneWorld(scene, track, { time = 'neblina' } = {}) {
         maples.push([px, pz, 0.7 + rand() * 0.6, groundAt(px, pz)]);
       }
     }
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
-    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.35, 4, 5); trunkGeo.translate(0, 2, 0);
-    const lowerGeo = new THREE.ConeGeometry(2.6, 9, 7); lowerGeo.translate(0, 7.5, 0);
-    const upperGeo = new THREE.ConeGeometry(1.7, 7, 7); upperGeo.translate(0, 12.5, 0);
-    const foliage = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshLambertMaterial({ color: 0x4a3222 }), cedars.length);
-    cedarLower = new THREE.InstancedMesh(lowerGeo, foliage, cedars.length);
-    cedarUpper = new THREE.InstancedMesh(upperGeo, foliage, cedars.length);
-    cedars.forEach(([px, pz, k, h], i) => {
-      q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rand() * Math.PI);
-      m4.compose(p.set(px, h - 0.6, pz), q, sc.set(k, k * (0.9 + rand() * 0.35), k));
-      trunks.setMatrixAt(i, m4); cedarLower.setMatrixAt(i, m4); cedarUpper.setMatrixAt(i, m4);
-      cedarBase.push(0.75 + rand() * 0.5);
+    cedarField = buildTreeField({
+      kind: 'cedar', rand, trunkColor: 0x4a3222,
+      items: cedars.map(([px, pz, k, h]) => [px, h - 0.4, pz, k]),
     });
-    add(trunks); add(cedarLower); add(cedarUpper);
+    cedars.forEach(() => cedarBase.push(0.75 + rand() * 0.5));
+    add(cedarField.group);
 
-    const mTrunk = new THREE.CylinderGeometry(0.12, 0.2, 2.4, 5); mTrunk.translate(0, 1.2, 0);
-    const crown = new THREE.IcosahedronGeometry(2.3, 0); crown.scale(1.25, 0.85, 1.25); crown.translate(0, 3.6, 0);
-    const mt = new THREE.InstancedMesh(mTrunk, new THREE.MeshLambertMaterial({ color: 0x3e3026 }), maples.length);
-    mapleCrown = new THREE.InstancedMesh(crown, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), maples.length);
-    maples.forEach(([px, pz, k, h], i) => {
-      q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rand() * Math.PI);
-      m4.compose(p.set(px, h - 0.3, pz), q, sc.set(k, k, k));
-      mt.setMatrixAt(i, m4); mapleCrown.setMatrixAt(i, m4);
-      mapleBase.push([rand(), 0.8 + rand() * 0.4]);
+    mapleField = buildTreeField({
+      kind: 'broadleaf', rand, trunkColor: 0x3e3026,
+      items: maples.map(([px, pz, k, h]) => [px, h - 0.2, pz, k]),
     });
-    add(mt); add(mapleCrown);
+    maples.forEach(() => mapleBase.push([rand(), 0.8 + rand() * 0.4]));
+    add(mapleField.group);
+
+    // Mato rasteiro logo depois do muro e da mureta: o que passa mais perto da câmera.
+    const bushes = [];
+    for (let s = 0; s < track.length; s += 3) {
+      const j = at(s);
+      for (const sd of [1, -1]) {
+        if (rand() < 0.45) continue;
+        const o = sd * (W + 1.4 + rand() * 4), px = x[j] + nx[j] * o, pz = z[j] + nz[j] * o;
+        if (!roadClear(px, pz, 1.2)) continue;
+        bushes.push([px, groundAt(px, pz) - 0.15, pz, 0.7 + rand() * 0.9]);
+      }
+    }
+    // Capim no pé do muro e matacões saindo do barranco: detalhe bem perto da câmera.
+    const tufts = [], rocks = [];
+    for (let s2 = 0; s2 < track.length; s2 += 1.5) {
+      const j = at(s2);
+      for (const sd of [1, -1]) {
+        if (rand() < 0.4) continue;
+        const o = sd * (W + 0.3 + rand() * 2), px = x[j] + nx[j] * o, pz = z[j] + nz[j] * o;
+        if (!roadClear(px, pz, 0.25)) continue;
+        tufts.push([px, groundAt(px, pz) - 0.05, pz, 0.6 + rand() * 0.7]);
+      }
+    }
+    add(buildTufts({ items: tufts, rand }));
+    for (let s2 = 0; s2 < track.length; s2 += 9) {
+      const j = at(s2);
+      const sd = rand() < 0.5 ? 1 : -1;
+      const o = sd * (W + 2.5 + rand() * 7), px = x[j] + nx[j] * o, pz = z[j] + nz[j] * o;
+      if (!roadClear(px, pz, 2)) continue;
+      rocks.push([px, groundAt(px, pz) - 0.3 - rand() * 0.3, pz, 0.6 + rand() * 1.3]);
+    }
+    add(buildRocks({ items: rocks, rand }));
+
+    bushField = buildUndergrowth({ items: bushes, rand });
+    bushes.forEach(() => bushBase.push(0.9 + rand() * 0.7));
+    add(bushField.group);
   }
   const recolorTrees = () => {
     const c = new THREE.Color();
-    cedarBase.forEach((k, i) => {
-      c.setRGB(T.cedar[0] * k, T.cedar[1] * k, T.cedar[2] * k);
-      cedarLower.setColorAt(i, c); cedarUpper.setColorAt(i, c.multiplyScalar(1.12));
-    });
+    cedarBase.forEach((k, i) => cedarField.setColor(i, c.setRGB(T.cedar[0] * k, T.cedar[1] * k, T.cedar[2] * k)));
     mapleBase.forEach(([pick, k], i) => {
       const base = T.maples[Math.floor(pick * T.maples.length)];
-      mapleCrown.setColorAt(i, c.setRGB(base[0] * k, base[1] * k, base[2] * k));
+      mapleField.setColor(i, c.setRGB(base[0] * k, base[1] * k, base[2] * k));
     });
-    for (const m of [cedarLower, cedarUpper, mapleCrown]) if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    // O mato segue a cor dos cedros, um tom mais claro e amarelado.
+    bushBase.forEach((k, i) => bushField.setColor(i, c.setRGB(T.cedar[0] * k * 1.5, T.cedar[1] * k * 1.25, T.cedar[2] * k * 0.9)));
+    cedarField.applyColors();
+    mapleField.applyColors();
+    bushField.applyColors();
   };
 
   // --- Largada no alto: pórtico com faixa, casa de chá (茶屋) e máquinas de refrigerante --------------------------

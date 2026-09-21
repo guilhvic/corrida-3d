@@ -1,6 +1,6 @@
 // Estúdio de carros: o carro parado na largada de uma pista, com câmera orbital e ângulos prontos.
 // Serve para comparar os modelos em alta resolução (ou com o pós-processamento de PS2 do jogo).
-// Parâmetros: ?car=kaze180|seiran|tsubame&track=wangan|fujimi|hakone&time=...&view=tras34&ps2=0
+// Parâmetros: ?car=kaze180|seiran|kaminari86|tsubame&track=wangan|fujimi|hakone&time=...&view=tras34&ps2=0
 import * as THREE from 'three';
 import { createCarModel } from '../src/carModel.js';
 import { buildWorld } from '../src/world.js';

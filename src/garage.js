@@ -23,6 +23,10 @@ export const PAINTS = [
   { id: 'lima', name: 'VERDE LIMA', color: 0x86b818, unlock: 'angulo-2' },
   { id: 'galaxia', name: 'ROXO GALÁXIA', color: 0x2a1458, finish: 'pearl', unlock: 'drift-3' },
   { id: 'dourado', name: 'OURO CHAMPAGNE', color: 0xb08d3e, finish: 'metallic', unlock: 'ss-3' },
+  // Exclusivas do BODYSHOP (shop = preço em ¥)
+  { id: 'champion', name: 'BRANCO CHAMPION', color: 0xf2f0e6, finish: 'pearl', shop: 3500 },
+  { id: 'candy', name: 'VERMELHO CANDY', color: 0x8e0a14, finish: 'pearl', shop: 4500 },
+  { id: 'midnight', name: 'MIDNIGHT PURPLE', color: 0x2b1b4a, finish: 'pearl', shop: 6000 },
 ];
 
 export const RIMS = [
@@ -77,6 +81,8 @@ export const STICKERS = [
   { id: 'muteki', name: 'MUTEKI', text: '無敵', style: 'kanji', unlock: 'vitoria-3' },
   { id: 'ame', name: 'REI DA CHUVA', text: '雨の王', style: 'brush', unlock: 'chuva' },
   { id: 'hakone', name: 'HAKONE SAISOKU', text: '箱根最速', style: 'brush', unlock: 'hakone' },
+  { id: 'ryusei', name: 'RYŪSEI (METEORO)', text: '流星', style: 'kanji', shop: 2000 },
+  { id: 'kanjozoku', name: 'KANJOZOKU', text: '環状族', style: 'brush', shop: 2800 },
 ];
 
 export const TRAILS = [
@@ -100,8 +106,13 @@ export const DEFAULT_GARAGE = { paint: 'original', rims: 'original', rimColor: '
 
 const find = (list, id) => list.find((o) => o.id === id) || list[0];
 
-// unlocked: { idDaConquista: data } do perfil
-export const isLocked = (item, unlocked = {}) => !!item?.unlock && !unlocked[item.unlock];
+// unlocked: { idDaConquista: data } do perfil, mais as compras do BODYSHOP ('shop:tipo:id').
+// Item de medalha libera pela medalha ou pela compra; exclusivo da loja (shop), só comprando.
+export const isLocked = (item, unlocked = {}, slot = null) => {
+  if (!item || (!item.unlock && !item.shop)) return false;
+  if (item.unlock && unlocked[item.unlock]) return false;
+  return !(slot && unlocked[`shop:${slot}:${item.id}`]);
+};
 
 function readAll() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
@@ -113,7 +124,7 @@ export function loadGarage(carId, unlocked = null) {
   const out = { ...DEFAULT_GARAGE };
   for (const [key, list] of Object.entries(GARAGE_OPTIONS)) {
     const item = find(list, saved[key] ?? out[key]);
-    out[key] = unlocked && isLocked(item, unlocked) ? DEFAULT_GARAGE[key] : item.id;
+    out[key] = unlocked && isLocked(item, unlocked, key) ? DEFAULT_GARAGE[key] : item.id;
   }
   return out;
 }

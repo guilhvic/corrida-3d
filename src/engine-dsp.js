@@ -73,6 +73,10 @@ export const ENGINE_PROFILES = {
     name: '6 EM LINHA TURBO', firings: 6, gains: [1, 0.97, 1.03, 0.98, 1.02, 0.99], width: [0.16, 0.3], shape: 'sine', jitter: 0.05, lope: 0,
     pipe: 1.3, body: [92, 7.5], bright: 0.85, drive: 0.85, turbo: 1.25, pops: 0.03, intake: 0.05, redline: 7500, level: 0.95,
   },
+  i4na: {
+    name: '4 CIL. ASPIRADO', firings: 4, gains: [1, 0.94, 1.05, 0.96], width: [0.08, 0.18], shape: 'sine', jitter: 0.1, lope: 0,
+    pipe: 0.82, body: [150, 5.5], bright: 1.25, drive: 1.15, turbo: 0, pops: 0.06, intake: 0.13, redline: 7800, level: 0.78,
+  },
   rotary: {
     name: 'ROTATIVO 2 ROTORES', firings: 4, gains: [1, 0.98, 1, 0.98], width: [0.34, 0.5], shape: 'box', jitter: 0.08, lope: 0.9,
     pipe: 0.72, body: [190, 5], bright: 1.35, drive: 1.5, turbo: 0, pops: 0.12, intake: 0.09, redline: 8000, level: 0.55,

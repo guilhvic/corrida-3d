@@ -9,6 +9,7 @@ const { sides } = P;
 export const tsubame = {
   color: 0x1d4fb8,
   finish: 'solid',
+  engineColor: 0xb4b8be, // tampa de válvulas (aparece se o capô arrancar)
   axles: { a: 1.1, b: 1.165 },
   plate: ['神戸 500', 'す', '8-89'],
   wheels: { style: 'mesh', color: 0xc7cacf, x: 0.72, width: 0.2, rimRadius: 0.19, caliper: 0x6a6a6a, lip: 'polished' },

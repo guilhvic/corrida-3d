@@ -99,7 +99,9 @@ function gaugeTexture() {
 
 // headlight: false dispensa a SpotLight (rivais: cada luz a mais pesa em todos os materiais da cena).
 // look (garagem): { color, finish, rims, rimColor, wing ('original'|'none'|'gt'|'duck'), drop (m), sticker { text, style } }
-export function createCarModel({ design: designId = 'kaze180', color, ghost = false, envMap = null, headlight: withHeadlight = true, look = null } = {}) {
+// breakable: peças que soltam, amassado no ponto e cofre do motor (só o carro do jogador; rivais e vitrines
+// ficam com as peças fundidas em poucas malhas, como antes).
+export function createCarModel({ design: designId = 'kaze180', color, ghost = false, envMap = null, headlight: withHeadlight = true, look = null, breakable = false } = {}) {
   const design = DESIGNS[designId] || DESIGNS.kaze180;
   const root = new THREE.Group();
   root.rotation.order = 'YXZ'; // rumo e depois a inclinação da rampa
@@ -161,6 +163,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     THREE, ghost, body: shape, probe, parent: body, detail, root, mats, design, look, R,
     axles: design.axles, NOSE: shape.zMax, TAIL: shape.zMin,
     aero: (m) => { aeroParts.push(m); return m; }, // aerofólio original (a garagem pode trocar)
+    breakables: ghost || !breakable ? null : [], // peças que se soltam numa batida (P.breakable)
   };
   ctx.popup = (spec) => P.popupHeadlight(ctx, spec);
   // Peças próprias do design: devolve { tailMat, tailFlares: [[x,y,z]], beams: [[x,y,z]] }
@@ -212,7 +215,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
   body.add(interior);
   const steeringWheel = new THREE.Group();
   const wheelSpin = new THREE.Group();
-  if (!ghost) buildInterior({ interior, steeringWheel, wheelSpin, design });
+  const insideParts = ghost ? { doorCards: {} } : buildInterior({ interior, steeringWheel, wheelSpin, design, separateCards: !!ctx.breakables });
 
   // --- Rodas -------------------------------------------------------------------------------------------
   const wheelSpec = { rr: design.wheels.rimRadius ?? 0.2, W: design.wheels.width ?? 0.215 };
@@ -225,6 +228,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
   const rotorMat = G(new THREE.MeshStandardMaterial({ map: wtex?.rotor ?? null, metalness: 0.85, roughness: 0.42, envMap }));
   const caliperMat = std({ color: design.wheels.caliper ?? 0xc0151b, roughness: 0.32, metalness: 0.1 });
   const wheels = [];
+  const brakeParts = []; // discos e pinças: somem de longe (nível de detalhe)
   const wx = design.wheels.x ?? 0.75;
   for (const [x, z, front] of [[wx, a, true], [-wx, a, true], [wx, -b, false], [-wx, -b, false]]) {
     const side = Math.sign(x);
@@ -237,12 +241,14 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     const rotor = new THREE.Mesh(W.rotorGeometry(wheelSpec.rr), rotorMat);
     rotor.position.x = -side * 0.035;
     spin.add(rotor);
+    brakeParts.push(rotor);
     pivot.add(spin);
     if (!ghost) {
       const caliper = new THREE.Mesh(W.caliperGeometry(wheelSpec.rr), caliperMat);
       caliper.position.x = -side * 0.035;
       caliper.rotation.x = front ? 0.55 : Math.PI - 0.55;
       pivot.add(caliper);
+      brakeParts.push(caliper);
     }
     root.add(pivot);
     wheels.push({ pivot, spin, front });
@@ -250,7 +256,11 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
 
   // --- Brilhos, sombra e faróis ------------------------------------------------------------------------
   const tailFlares = [];
+  const beams = []; // fachos na névoa, na ordem dos lados [-1, 1] (direito, esquerdo)
+  let headlightLight = null; // holofote que ilumina a pista (um só, no meio da frente)
   if (!ghost) {
+    // Aerofólio original também pode arrancar (o da garagem fica preso).
+    if (ctx.breakables) for (const m of aeroParts) if (m.parent) P.breakable(ctx, 'aerofolio', m, { hp: 2.8 });
     const glowTex = glowTexture();
     // Só as lanternas ganham brilho: o dos faróis apareceria por cima do capô visto de trás.
     for (const [px, py, pz] of parts.tailFlares) {
@@ -280,10 +290,15 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
       const beam = new THREE.Mesh(beamGeo, beamMat);
       beam.position.set(px, py, pz);
       beam.rotation.x = 0.045;
-      body.add(beam);
+      // Carro que quebra: cada facho num grupo próprio (fora da junção de malhas) para apagar sozinho.
+      if (!ctx.breakables) { body.add(beam); continue; }
+      const holder = new THREE.Group();
+      holder.add(beam);
+      body.add(holder);
+      beams.push(holder);
     }
     if (withHeadlight) {
-      const headlight = new THREE.SpotLight(0xfff0d0, 90, 70, 0.5, 0.6, 1.2);
+      const headlight = (headlightLight = new THREE.SpotLight(0xfff0d0, 90, 70, 0.5, 0.6, 1.2));
       headlight.position.set(0, 0.8, shape.zMax - 0.1);
       headlight.target.position.set(0, 0, 22);
       root.add(headlight, headlight.target);
@@ -295,25 +310,119 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
   // Junta as peças estáticas (menos draw calls): interior vira uma malha só com cor por vértice
   bakeColors(wheelSpin, new Set());
   mergeByMaterial(wheelSpin, new Set());
-  bakeColors(interior, new Set([steeringWheel]));
-  mergeByMaterial(interior, new Set([steeringWheel]));
-  mergeByMaterial(detail, new Set());
-  mergeByMaterial(body, new Set([interior, detail]));
+  const cardHolders = Object.values(insideParts.doorCards);
+  bakeColors(interior, new Set([steeringWheel, ...cardHolders]));
+  mergeByMaterial(interior, new Set([steeringWheel, ...cardHolders]));
+  const holders = (ctx.breakables || []).map((b) => b.holder);
+  // Plásticos e borrachas escuros e foscos (frisos, borracha, acetinado, carbono, assoalho, cavidades,
+  // fuligem...) viram um material só com cor por vértice: de perto e de longe são praticamente iguais e
+  // cada material a menos é uma chamada de desenho a menos por carro. Pintura, cromado, vidro e luzes ficam.
+  if (!ghost) {
+    const luma = (c) => c.r * 0.3 + c.g * 0.59 + c.b * 0.11;
+    const dark = (m) => (m.isMeshStandardMaterial || m.isMeshBasicMaterial) && !m.isMeshPhysicalMaterial
+      && m !== paint && m !== shellPaint && !m.map && !m.transparent && !m.vertexColors
+      && luma(m.color) < 0.1 && (m.metalness ?? 0) < 0.6 && !(m.emissive && m.emissive.getHex());
+    const darkShared = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.2, envMap, envMapIntensity: 0.6 });
+    bakeColors(detail, new Set(holders), { filter: dark, shared: darkShared });
+    bakeColors(body, new Set([interior, detail, ...holders, ...beams]), { filter: dark, shared: darkShared });
+  }
+  mergeByMaterial(detail, new Set(holders));
+  mergeByMaterial(body, new Set([interior, detail, ...holders, ...beams]));
+  for (const h of holders) mergeByMaterial(h, new Set());
+
+  // Visto de dentro (câmera de cockpit): a lataria só tem a face de fora, então o teto, as colunas e as portas
+  // ganham um forro com o lado de trás da mesma superfície, e os vidros um reflexo fraco por dentro.
+  // Ficam no interior: somem junto com ele nos rivais distantes.
+  const eye = new THREE.Object3D(); // olhos do piloto, no referencial da carroceria
+  if (!ghost) {
+    const inside = { seatY: 0.4, ...design.interior };
+    eye.position.set(-0.37, inside.seatY + 0.75, -0.64);
+    body.add(eye);
+    const liner = new THREE.MeshStandardMaterial({ color: inside.liner ?? 0x17171a, roughness: 1, side: THREE.BackSide });
+    interior.add(new THREE.Mesh(built.body, liner));
+    if (built.glass) {
+      const innerGlass = mats.glass.clone();
+      innerGlass.side = THREE.BackSide;
+      innerGlass.opacity = 0.14;
+      const m = new THREE.Mesh(built.glass, innerGlass);
+      m.renderOrder = 1;
+      interior.add(m);
+    }
+  }
 
   // Danos (só no carro "de verdade"; o fantasma não amassa) e vãos das portas na pintura
   const damageUniforms = {
     uDent: { value: new THREE.Vector4() }, uScratch: { value: new THREE.Vector2() },
     uCarZ: { value: new THREE.Vector2(shape.zMin, shape.zMax) },
+    uHitPos: { value: Array.from({ length: M.MAX_HITS }, () => new THREE.Vector4(0, 0, 0, 0)) }, // w = 0: vazio (o padrão do three é w = 1)
+    uHitDir: { value: Array.from({ length: M.MAX_HITS }, () => new THREE.Vector4(0, 0, 0, 0)) }, // w = 0: vazio (o padrão do three é w = 1)
+    uTornMin: { value: Array.from({ length: M.MAX_TORN }, () => new THREE.Vector4(0, 0, 0, 0)) }, // w = 0: vazio (o padrão do three é w = 1)
+    uTornMax: { value: Array.from({ length: M.MAX_TORN }, () => new THREE.Vector4(0, 0, 0, 0)) }, // w = 0: vazio (o padrão do three é w = 1)
     ...M.lineUniforms(design.panelLines),
   };
+  let hitSlot = 0;
   if (!ghost) {
-    for (const group of [body, detail]) {
-      for (const child of group.children) {
-        if (!child.isMesh) continue;
-        for (const m of [child.material].flat()) M.patchCarMaterial(m, damageUniforms, { scratches: m === paint || m === shellPaint, gaps: m === shellPaint });
-      }
-    }
+    body.traverse((child) => {
+      if (!child.isMesh) return;
+      for (let q = child.parent; q; q = q.parent) if (q === interior) return;
+      for (const m of [child.material].flat()) M.patchCarMaterial(m, damageUniforms, { scratches: m === paint || m === shellPaint, gaps: m === shellPaint, local: !!ctx.breakables });
+    });
   }
+
+  // --- Quebra ------------------------------------------------------------------------------------------
+  // Painéis que arrancam: um pedaço da própria superfície da lataria vira destroço (a chapa de baixo
+  // fica amassada e escura, como se o painel tivesse saído).
+  const door = design.door ?? { z0: a - 0.6, z1: -b + 0.7 };
+  const doorZ0 = Math.min(door.z0, door.z1) + 0.04, doorZ1 = Math.max(door.z0, door.z1) - 0.04;
+  const PANELS = {
+    'para-choque-diant': { z0: shape.zMax - 0.5, z1: shape.zMax - 0.02, g0: 0.9, g1: 3.4, both: true, mode: 1 },
+    'para-choque-tras': { z0: shape.zMin + 0.02, z1: shape.zMin + 0.5, g0: 0.9, g1: 3.4, both: true, mode: 1 },
+    capo: { z0: 0.75, z1: shape.zMax - 0.35, g0: 4.25, g1: 7, both: true, mode: 2 },
+    'porta-esq': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: 1, mode: 3 },
+    'porta-dir': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: -1, mode: 3 },
+  };
+  const panelMat = paint.clone();
+  panelMat.side = THREE.DoubleSide;
+  const panelMesh = (name) => {
+    const P0 = PANELS[name];
+    const geos = [];
+    for (const side of P0.both ? [1, -1] : [P0.side]) geos.push(shape.patch({ z0: P0.z0, z1: P0.z1, g0: P0.g0, g1: P0.g1, side, lift: 0.006, nu: 6, nv: 6 }));
+    const geo = geos.length > 1 ? mergeGeometries(geos) : geos[0];
+    if (geos.length > 1) geos.forEach((g) => g.dispose());
+    return new THREE.Mesh(geo, panelMat);
+  };
+  // Tira um objeto do carro mantendo onde ele está no mundo, com o pivô no centro dele (para girar
+  // em torno de si mesmo ao voar).
+  const toWorld = (object) => {
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(object);
+    const center = box.getCenter(new THREE.Vector3());
+    const world = object.matrixWorld.clone();
+    object.removeFromParent();
+    object.position.set(0, 0, 0); object.quaternion.identity(); object.scale.set(1, 1, 1);
+    object.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z).multiply(world));
+    const holder = new THREE.Group();
+    holder.position.copy(center);
+    holder.add(object);
+    return { object: holder, radius: Math.max(0.05, box.getSize(new THREE.Vector3()).y * 0.5) };
+  };
+  const broken = new Set();
+  let rearLampsOut = false;
+  let detailNear = true;
+  // Um farol a menos: some o facho daquele lado e o holofote cai pela metade (apaga sem os dois).
+  // Sem nenhum farol, o brilho das lâmpadas fixas também apaga.
+  const lampsOut = new Set();
+  const lampOut = (name) => {
+    lampsOut.add(name);
+    const beam = beams[name === 'farol-dir' ? 0 : 1];
+    if (beam) beam.visible = false;
+    const left = 2 - lampsOut.size;
+    if (headlightLight) { headlightLight.intensity = 90 * (left / 2); headlightLight.visible = left > 0; }
+    if (left <= 0 && mats.bulb?.color) mats.bulb.color.setRGB(0.05, 0.05, 0.05);
+  };
+  // Cofre do motor: só aparece quando o capô arranca.
+  const engineBay = ctx.breakables ? buildEngineBay({ shape, design, a }) : null;
+  if (engineBay) { engineBay.visible = false; body.add(engineBay); }
 
   const envMaterials = new Set();
   root.traverse((o) => {
@@ -323,6 +432,8 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
 
   return {
     root,
+    body,
+    eye,
     design: designId,
     tailLights: parts.tailFlares, // [x, y, z] das lanternas (rastro de drift)
     paintMaterials: [...envMaterials],
@@ -337,7 +448,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
         w.spin.rotation.x = car.wheelSpin;
       }
       wheelSpin.rotation.z = -car.steer * 2.5; // relação de direção ~14:1 encurtada para aparecer
-      if (!ghost && parts.tailMat) {
+      if (!ghost && parts.tailMat && !rearLampsOut) {
         const braking = car.brake > 0.05;
         parts.tailMat.color.setScalar(braking ? 2.6 : 1.25);
         for (const f of tailFlares) f.scale.setScalar(braking ? 1.25 : 0.5);
@@ -348,9 +459,129 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
       damageUniforms.uDent.value.set(d.front, d.rear, d.left, d.right);
       damageUniforms.uScratch.value.set(d.scratchL, d.scratchR);
     },
+    // Amassado no ponto da batida (coordenadas do carro): dir = para onde a chapa afunda (unitário),
+    // depth e radius em m. Os mais antigos dão lugar aos novos (anel de MAX_HITS).
+    addHit(local, dir, depth, radius) {
+      const pos = damageUniforms.uHitPos.value, dirs = damageUniforms.uHitDir.value;
+      // Bateu de novo no mesmo lugar: aprofunda o amassado que já existe.
+      for (let i = 0; i < pos.length; i++) {
+        if (pos[i].w > 0 && Math.hypot(pos[i].x - local.x, pos[i].y - local.y, pos[i].z - local.z) < pos[i].w * 0.5) {
+          dirs[i].w = Math.min(0.28, dirs[i].w + depth * 0.7);
+          pos[i].w = Math.min(1.1, Math.max(pos[i].w, radius));
+          return;
+        }
+      }
+      pos[hitSlot].set(local.x, local.y, local.z, radius);
+      dirs[hitSlot].set(dir.x, dir.y, dir.z, depth);
+      hitSlot = (hitSlot + 1) % pos.length;
+    },
+    // Amassados atuais (para guardar no perfil) e volta deles na corrida seguinte.
+    getHits() {
+      return damageUniforms.uHitPos.value.map((p, i) => [p.x, p.y, p.z, p.w, ...damageUniforms.uHitDir.value[i].toArray()]).filter((h) => h[3] > 0);
+    },
+    setHits(list = []) {
+      for (const v of damageUniforms.uHitPos.value) v.set(0, 0, 0, 0);
+      for (const v of damageUniforms.uHitDir.value) v.set(0, 0, 0, 0);
+      list.slice(0, M.MAX_HITS).forEach((h, i) => {
+        damageUniforms.uHitPos.value[i].set(h[0], h[1], h[2], h[3]);
+        damageUniforms.uHitDir.value[i].set(h[4], h[5], h[6], h[7]);
+      });
+      hitSlot = list.length % M.MAX_HITS;
+    },
+    // Peças soltáveis (retrovisores, faróis, placas, aerofólio) perto de um ponto do carro.
+    breakablesNear(local, reach) {
+      const out = [];
+      root.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(body.matrixWorld).invert();
+      for (const b of ctx.breakables || []) {
+        if (broken.has(b.name) || !b.holder.parent) continue;
+        const c = new THREE.Box3().setFromObject(b.holder).getCenter(new THREE.Vector3()).applyMatrix4(inv);
+        const d = Math.hypot(c.x - local.x, c.z - local.z);
+        if (d < reach) out.push({ name: b.name, hp: b.hp, distance: d });
+      }
+      return out.sort((p, q) => p.distance - q.distance);
+    },
+    isBroken: (name) => broken.has(name),
+    // Solta uma peça ou painel. Devolve { object, radius } já no mundo (para src/debris.js), ou null.
+    detach(name) {
+      if (broken.has(name) || !ctx.breakables) return null;
+      if (PANELS[name]) {
+        broken.add(name);
+        const mesh = panelMesh(name);
+        // O painel sai de verdade: a mesma região da lataria vira buraco (afunda e escurece no shader).
+        mesh.geometry.computeBoundingBox();
+        const box = mesh.geometry.boundingBox.clone().expandByScalar(0.03);
+        const slot = damageUniforms.uTornMax.value.findIndex((v) => v.w <= 0);
+        if (slot >= 0) {
+          damageUniforms.uTornMin.value[slot].set(box.min.x, box.min.y, box.min.z, 1);
+          damageUniforms.uTornMax.value[slot].set(box.max.x, box.max.y, box.max.z, PANELS[name].mode);
+        }
+        // Sem capô aparece o motor; sem porta, o forro dela vai junto e abre para o interior.
+        if (name === 'capo' && engineBay) engineBay.visible = true;
+        if (name === 'porta-esq' && insideParts.doorCards.esq) insideParts.doorCards.esq.visible = false;
+        if (name === 'porta-dir' && insideParts.doorCards.dir) insideParts.doorCards.dir.visible = false;
+        body.add(mesh);
+        return toWorld(mesh);
+      }
+      const b = (ctx.breakables || []).find((q) => q.name === name && q.holder.parent);
+      if (!b) return null;
+      broken.add(name);
+      if (name === 'farol-dir' || name === 'farol-esq') lampOut(name);
+      return toWorld(b.holder);
+    },
+    // Corrida seguinte: o que já tinha quebrado continua faltando, sem voar de novo.
+    removeSilently(name) {
+      if (name === 'lanternas') { this.breakRearLamps(); return; }
+      if ((name === 'farol-esq' || name === 'farol-dir') && this.breakHeadlight(name)) return;
+      const piece = this.detach(name);
+      if (piece) piece.object.traverse((o) => { if (o.geometry && !o.geometry.userData.shared && PANELS[name]) o.geometry.dispose(); });
+    },
+    // Farol quebrado numa batida de frente. Escamoteável sai como peça (detach); fixo só apaga e
+    // perde o brilho. Devolve se quebrou agora.
+    breakHeadlight(name) {
+      if (broken.has(name) || !ctx.breakables) return false;
+      const popup = (ctx.breakables || []).find((q) => q.name === name && q.holder.parent);
+      if (popup) return false; // quem cuida é a lista de peças (sai voando)
+      broken.add(name);
+      lampOut(name);
+      return true;
+    },
+    // Lanternas estouradas: apagam e param de acender no freio.
+    breakRearLamps() {
+      if (rearLampsOut || !parts.tailMat) return false;
+      rearLampsOut = true;
+      broken.add('lanternas');
+      parts.tailMat.color.setScalar(0.18);
+      for (const f of tailFlares) f.visible = false;
+      return true;
+    },
+    brokenParts: () => [...broken],
+    shardMaterial: panelMat, // lascas de pintura (dupla face, cor do carro)
+    // De longe (rivais): some o que vira poucos pixels — interior, peças miúdas, freios e as peças pequenas
+    // ainda presas (retrovisores, placas). As que já voaram são destroços e não entram aqui.
     setDetail(near) {
+      if (near === detailNear) return;
+      detailNear = near;
       interior.visible = near;
       detail.visible = near;
+      for (const m of brakeParts) m.visible = near;
+      for (const b of ctx.breakables || []) {
+        if (broken.has(b.name) || !/^(retrovisor|placa)/.test(b.name)) continue;
+        b.holder.visible = near;
+      }
+    },
+    // Monta no carro, por um instante, o que só aparece numa batida (painel solto, cofre do motor), para o
+    // jogo compilar esses shaders antes da primeira batida. Devolve a função que desfaz.
+    warmup() {
+      const extra = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), panelMat);
+      body.add(extra);
+      const bay = engineBay?.visible;
+      if (engineBay) engineBay.visible = true;
+      return () => {
+        extra.removeFromParent();
+        extra.geometry.dispose();
+        if (engineBay) engineBay.visible = bay;
+      };
     },
     setPose(x, z, yaw, y = 0, pitch = 0) {
       root.position.set(x, y + 0.03, z);
@@ -393,7 +624,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
 }
 
 // --- Interior ------------------------------------------------------------------------------------------
-function buildInterior({ interior, steeringWheel, wheelSpin, design }) {
+function buildInterior({ interior, steeringWheel, wheelSpin, design, separateCards = false }) {
   const inside = { dashZ: 0.42, cage: 'half', shelf: true, floorY: 0.32, dashY: 0.8, seatY: 0.4, ...design.interior };
   const std = (o) => new THREE.MeshStandardMaterial(o);
   const carpet = std({ color: 0x151517, roughness: 1 });
@@ -452,8 +683,15 @@ function buildInterior({ interior, steeringWheel, wheelSpin, design }) {
     interior.add(seat);
   }
   if (inside.shelf) add(new THREE.BoxGeometry(1.36, 0.03, 0.6), carpet, [0, inside.shelfY ?? 0.84, inside.shelfZ ?? -1.55]);
-  // Forros de porta
-  for (const s of sides) add(P.roundedBox(0.04, 0.34, 1.0, 0.02), dashMat, [s * (inside.doorX ?? 0.68), floorY + 0.36, -0.12]);
+  // Forros de porta: cada um num grupo próprio, porque saem junto com a porta numa batida
+  const doorCards = {};
+  for (const s of sides) {
+    if (!separateCards) { add(P.roundedBox(0.04, 0.34, 1.0, 0.02), dashMat, [s * (inside.doorX ?? 0.68), floorY + 0.36, -0.12]); continue; }
+    const card = new THREE.Group();
+    P.addMesh(card, P.roundedBox(0.04, 0.34, 1.0, 0.02), dashMat, { pos: [s * (inside.doorX ?? 0.68), floorY + 0.36, -0.12] });
+    interior.add(card);
+    doorCards[s > 0 ? 'esq' : 'dir'] = card;
+  }
 
   if (inside.cage === 'half') {
     const cz = inside.cageZ ?? -1.08, top = inside.cageTop ?? 1.16;
@@ -501,18 +739,20 @@ function buildInterior({ interior, steeringWheel, wheelSpin, design }) {
     P.tube(interior, [el, hand], 0.038, suit, { radial: 8 });
     add(new THREE.SphereGeometry(0.035, 10, 8), glove, hand);
   }
+  return { doorCards };
 }
 
 // Troca os materiais opacos sem textura de um grupo por um único material com cor por vértice
 // (as peças depois se juntam numa malha só). keep: grupos que não entram.
-function bakeColors(group, keep) {
-  let shared = null;
+// filter: quais materiais entram (padrão: todos os Standard lisos); shared: o material que fica no lugar.
+function bakeColors(group, keep, { filter = null, shared: sharedIn = null } = {}) {
+  let shared = sharedIn;
   const lin = new THREE.Color();
   group.traverse((o) => {
     if (!o.isMesh || Array.isArray(o.material)) return;
     for (let q = o.parent; q && q !== group; q = q.parent) if (keep.has(q)) return;
     const m = o.material;
-    if (!m.isMeshStandardMaterial || m.map || m.transparent || m.vertexColors) return;
+    if (filter ? !filter(m) : (!m.isMeshStandardMaterial || m.map || m.transparent || m.vertexColors)) return;
     if (!shared) shared = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.15 });
     let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
     for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
@@ -556,4 +796,42 @@ export function mergeByMaterial(group, keep) {
       if (!o.geometry.userData.shared) o.geometry.dispose();
     }
   }
+}
+
+// --- Cofre do motor ------------------------------------------------------------------------------------
+// Visto quando o capô sai: fundo e paredes escuras fechando o vão, bloco com a tampa de válvulas pintada
+// (cor por carro), coletor e filtro de ar, radiador na frente, bateria, torres de suspensão e mangueiras.
+function buildEngineBay({ shape, design, a }) {
+  const bay = new THREE.Group();
+  const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.3, ...o });
+  const dark = std({ color: 0x141416, roughness: 0.9, metalness: 0.1 });
+  const block = std({ color: 0x3a3c40, roughness: 0.55, metalness: 0.6 });
+  const cover = std({ color: design.engineColor ?? 0x9a1418, roughness: 0.45, metalness: 0.4 });
+  const alloy = std({ color: 0xb8bcc2, roughness: 0.3, metalness: 0.85 });
+  const rubber = std({ color: 0x0b0b0c, roughness: 0.95, metalness: 0 });
+  const add = (geo, mat, pos, rot) => P.addMesh(bay, geo, mat, { pos, rot });
+  const z0 = 0.78, z1 = shape.zMax - 0.38, zc = (z0 + z1) / 2, len = z1 - z0;
+  // Fundo, parede corta-fogo e paredes laterais (fecham o vão: não se enxerga o chão por dentro)
+  add(new THREE.BoxGeometry(1.3, 0.03, len), dark, [0, 0.3, zc]);
+  add(new THREE.BoxGeometry(1.3, 0.5, 0.03), dark, [0, 0.55, z0]);
+  for (const s of sides) add(new THREE.BoxGeometry(0.03, 0.42, len), dark, [s * 0.66, 0.52, zc]);
+  // Bloco e cabeçote com a tampa de válvulas, meio de lado como nos motores longitudinais
+  const ez = zc - 0.05;
+  add(P.roundedBox(0.42, 0.3, 0.6, 0.03), block, [0.02, 0.47, ez]);
+  add(P.roundedBox(0.36, 0.08, 0.56, 0.03), cover, [0.02, 0.66, ez]);
+  for (let i = 0; i < 4; i++) add(new THREE.CylinderGeometry(0.018, 0.018, 0.05, 8), rubber, [0.02, 0.71, ez - 0.2 + i * 0.13]); // cachimbos das velas
+  // Coletor de admissão e filtro de ar cônico
+  P.tube(bay, [[-0.18, 0.62, ez + 0.1], [-0.34, 0.66, ez + 0.02], [-0.44, 0.62, ez - 0.12]], 0.045, alloy, { radial: 10 });
+  add(new THREE.CylinderGeometry(0.09, 0.07, 0.16, 14), std({ color: 0xc02026, roughness: 0.8, metalness: 0 }), [-0.46, 0.6, ez - 0.2], [Math.PI / 2, 0, 0]);
+  // Radiador na frente com as mangueiras
+  add(new THREE.BoxGeometry(1.0, 0.34, 0.06), std({ color: 0x1e2124, roughness: 0.7, metalness: 0.5 }), [0, 0.5, z1 - 0.02]);
+  P.tube(bay, [[0.2, 0.62, ez + 0.3], [0.3, 0.6, z1 - 0.2], [0.32, 0.58, z1 - 0.05]], 0.022, rubber, { radial: 8 });
+  P.tube(bay, [[-0.1, 0.4, ez + 0.3], [-0.25, 0.4, z1 - 0.2], [-0.3, 0.42, z1 - 0.05]], 0.022, rubber, { radial: 8 });
+  // Bateria com os polos, torres de suspensão e reservatório de fluido
+  add(P.roundedBox(0.2, 0.17, 0.14, 0.01), rubber, [0.44, 0.44, z0 + 0.16]);
+  add(new THREE.CylinderGeometry(0.014, 0.014, 0.03, 8), std({ color: 0xc81e1e }), [0.4, 0.54, z0 + 0.16]);
+  add(new THREE.CylinderGeometry(0.014, 0.014, 0.03, 8), rubber, [0.48, 0.54, z0 + 0.16]);
+  for (const s of sides) add(new THREE.CylinderGeometry(0.08, 0.1, 0.2, 12), dark, [s * 0.52, 0.6, a]);
+  add(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 12), std({ color: 0xd8d4c4, roughness: 0.5, metalness: 0 }), [-0.46, 0.5, z0 + 0.2]);
+  return bay;
 }

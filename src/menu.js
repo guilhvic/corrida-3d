@@ -6,7 +6,8 @@ import { MAX_RACERS } from './race.js';
 import { DIFFICULTIES, DIFFICULTY_ORDER } from './difficulty.js';
 import { ENGINE_PROFILES } from './engine-dsp.js';
 import { GARAGE_OPTIONS, DEFAULT_GARAGE, loadGarage, saveGarage, isLocked } from './garage.js';
-import { loadProfile } from './profile.js';
+import { ProfileTracker, loadProfile, garageUnlocks, ownsCar } from './profile.js';
+import { CAR_PRICES, UPGRADES, upgradedParams, shopParts, PART_SLOTS } from './shop.js';
 import { ACHIEVEMENTS, MEDALS, achievementById, rewardOf, progressOf, driverTitle } from './achievements.js';
 import { loadRanking, pickGhost } from './ranking.js';
 import { CONFIG_GROUPS, DEFAULT_CONFIG, loadConfig, saveConfig } from './settings.js';
@@ -33,9 +34,9 @@ export function savedSettings() {
 }
 
 export class Menu {
-  constructor({ difficulty, onStart, onResume, onRestart, onQuit, onDifficulty, onSettings, onGarage, onScreen, onConfig }) {
+  constructor({ difficulty, onStart, onResume, onRestart, onQuit, onDifficulty, onSettings, onGarage, onRepair, onBuy, onShopPreview, onScreen, onConfig, onNav }) {
     this.root = document.getElementById('menu');
-    this.handlers = { onStart, onResume, onRestart, onQuit, onDifficulty, onSettings, onGarage, onScreen, onConfig };
+    this.handlers = { onStart, onResume, onRestart, onQuit, onDifficulty, onSettings, onGarage, onRepair, onBuy, onShopPreview, onScreen, onConfig, onNav };
     this.trackCache = new Map();
     this.difficulty = difficulty;
     this.screens = Object.fromEntries([...this.root.querySelectorAll('[data-screen]')].map((s) => [s.dataset.screen, s]));
@@ -98,10 +99,10 @@ export class Menu {
         },
       },
       car: {
-        count: () => CARS.length,
-        index: () => CARS.findIndex((c) => c.id === this.settings.car),
-        set: (i) => { this.settings.car = CARS[i].id; this.garage = loadGarage(CARS[i].id, this.unlocked); this.garagePeek = {}; },
-        label: (i) => [t(CARS[i].name), CARS[i].jp],
+        count: () => this.ownedCars().length,
+        index: () => Math.max(0, this.ownedCars().findIndex((c) => c.id === this.settings.car)),
+        set: (i) => { const c = this.ownedCars()[i]; this.settings.car = c.id; this.garage = loadGarage(c.id, this.unlocked); this.garagePeek = {}; },
+        label: (i) => [t(this.ownedCars()[i].name), this.ownedCars()[i].jp],
       },
       laps: {
         count: () => LAP_OPTIONS.length,
@@ -148,23 +149,48 @@ export class Menu {
         count: () => list.length,
         index: () => Math.max(0, list.findIndex((o) => o.id === (this.garagePeek[key] ?? this.garage[key]))),
         set: (i) => {
-          if (isLocked(list[i], this.unlocked)) this.garagePeek[key] = list[i].id;
+          if (isLocked(list[i], this.unlocked, key)) this.garagePeek[key] = list[i].id;
           else { delete this.garagePeek[key]; this.garage[key] = list[i].id; }
         },
         label: (i) => {
           const o = list[i];
-          if (!isLocked(o, this.unlocked)) return [t(o.name), `${i + 1}/${list.length}`];
-          const a = achievementById(o.unlock);
-          return [`🔒 ${t(o.name)}`, t('medalha {name}', { name: a?.name ?? '' })];
+          if (!isLocked(o, this.unlocked, key)) return [t(o.name), `${i + 1}/${list.length}`];
+          const a = o.unlock ? achievementById(o.unlock) : null;
+          return [`🔒 ${t(o.name)}`, a ? t('medalha {name} ou BODYSHOP', { name: a.name }) : t('à venda no BODYSHOP')];
         },
       };
     }
+
+    // BODYSHOP: abas (carros, preparação, peças) e o carro que recebe a preparação
+    this.configLabels = this.configLabels || [];
+    this.shopTab = 0;
+    this.shopCar = this.settings.car;
+    this.shopItems = [];
+    const shopTabs = document.getElementById('shop-tabs');
+    shopTabs.setAttribute('data-i18n-skip', '');
+    [['CARROS', '車'], ['PREPARAÇÃO', 'チューン'], ['PEÇAS', 'パーツ']].forEach(([name, jp], i) => {
+      shopTabs.insertAdjacentHTML('beforeend', `<button type="button" class="config-tab" data-nav data-action="shop-tab:${i}"><span class="tab-name"></span><span class="jp">${jp}</span></button>`);
+      this.configLabels.push([shopTabs.lastElementChild.querySelector('.tab-name'), name]);
+    });
+    this.selectors['shop-car'] = {
+      count: () => this.ownedCars().length,
+      index: () => Math.max(0, this.ownedCars().findIndex((c) => c.id === this.shopCar)),
+      set: (i) => { this.shopCar = this.ownedCars()[i].id; this.buildShop(); this.renderShopInfo(); },
+      label: (i) => [t(this.ownedCars()[i].name), this.ownedCars()[i].jp],
+    };
 
     // Configurações: tela montada a partir das definições (settings.js)
     this.config = loadConfig();
     const body = document.getElementById('config-body');
     body.setAttribute('data-i18n-skip', ''); // rótulos traduzidos em render()
-    this.configLabels = [];
+    this.configLabels = this.configLabels || [];
+    this.configTab = 0;
+    const tabs = document.getElementById('config-tabs');
+    tabs.setAttribute('data-i18n-skip', '');
+    CONFIG_GROUPS.forEach((group, i) => {
+      tabs.insertAdjacentHTML('beforeend', `<button type="button" class="config-tab" data-nav data-action="config-tab:${i}"><span class="tab-name"></span><span class="jp">${group.jp ?? ''}</span></button>`);
+      this.configLabels.push([tabs.lastElementChild.querySelector('.tab-name'), group.title]);
+    });
     for (const group of CONFIG_GROUPS) {
       const box = document.createElement('div');
       box.className = 'config-group';
@@ -193,6 +219,8 @@ export class Menu {
       }
       body.append(box);
     }
+    this.configBoxes = [...body.children];
+    this.showConfigTab(0);
 
     for (const sel of this.root.querySelectorAll('.selector')) {
       for (const arrow of sel.querySelectorAll('[data-dir]')) {
@@ -207,6 +235,11 @@ export class Menu {
     });
     // Sem foco nativo nos botões: Enter/Espaço são tratados pela navegação (senão clicariam duas vezes).
     this.root.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+    // Listas com rolagem (configurações, loja, ranking) e janela redimensionada: o cursor segue o item.
+    this.root.addEventListener('scroll', () => this.placeCursor(true), true);
+    addEventListener('resize', () => this.placeCursor(true));
+    // Clique direto num item também bipa (o teclado e o controle bipam pela navegação)
+    this.root.addEventListener('click', (e) => { if (e.target.closest('[data-action]')) this.handlers.onNav?.('select'); });
     this.root.addEventListener('pointermove', (e) => {
       const item = e.target.closest('[data-nav]');
       if (item) this.setFocus(this.items().indexOf(item));
@@ -216,7 +249,117 @@ export class Menu {
   get visible() { return this.current !== null; }
 
   // Conquistas liberadas (lidas do perfil salvo)
-  get unlocked() { return loadProfile().unlocked; }
+  get unlocked() { return garageUnlocks(loadProfile()); }
+
+  // Carros que o jogador tem (o seletor do singleplayer só mostra estes).
+  ownedCars() {
+    const p = loadProfile();
+    return CARS.filter((c) => ownsCar(p, c.id));
+  }
+
+  // --- BODYSHOP -----------------------------------------------------------------------------------
+  // Monta a lista da aba atual. Cada item: { kind, id, name, sub, price, owned, level, max, car, slot, key }
+  buildShop() {
+    const p = loadProfile();
+    const tabs = document.getElementById('shop-tabs');
+    tabs.querySelectorAll('.config-tab').forEach((el, i) => { el.dataset.on = String(i === this.shopTab); });
+    document.getElementById('shop-money').textContent = t('CAIXA ¥ {money}', { money: formatPoints(p.money) });
+    document.getElementById('shop-car-row').hidden = this.shopTab !== 1;
+    const items = [];
+    if (this.shopTab === 0) {
+      for (const car of CARS) {
+        items.push({ kind: 'car', id: car.id, car: car.id, name: t(car.name), sub: car.jp, price: CAR_PRICES[car.id] ?? 0, owned: ownsCar(p, car.id) });
+      }
+    } else if (this.shopTab === 1) {
+      const carId = this.shopCar;
+      const levels = p.upgrades?.[carId] || {};
+      for (const u of UPGRADES) {
+        const level = levels[u.id] || 0, max = u.levels.length;
+        items.push({ kind: 'upgrade', id: u.id, car: carId, name: t(u.name), sub: u.jp, level, max, owned: level >= max,
+          price: level >= max ? 0 : u.levels[level].price, upgrade: u });
+      }
+    } else {
+      const unlocked = garageUnlocks(p);
+      for (const part of shopParts()) {
+        const owned = !!unlocked[part.key] || (part.item.unlock && !!unlocked[part.item.unlock]);
+        items.push({ kind: 'part', id: part.item.id, slot: part.slot, key: part.key, car: this.settings.car, item: part.item,
+          name: t(part.item.name), sub: t(part.slotName), price: part.price, owned, medal: part.item.unlock });
+      }
+    }
+    this.shopItems = items;
+    const list = document.getElementById('shop-list');
+    list.innerHTML = items.map((it, i) => {
+      const broke = !it.owned && it.price > p.money;
+      const status = it.kind === 'upgrade'
+        ? `<span class="pips">${'▮'.repeat(it.level)}${'▯'.repeat(it.max - it.level)}</span> ${it.owned ? t('MÁX.') : `¥ ${formatPoints(it.price)}`}`
+        : it.owned ? (it.kind === 'car' ? (this.settings.car === it.id ? t('NA PISTA') : t('NA GARAGEM')) : t('COMPRADO')) : `¥ ${formatPoints(it.price)}`;
+      return `<button type="button" class="shop-item" data-nav data-action="shop:${i}"><b>${it.name}</b><small>${it.sub}</small>
+        <span class="price ${it.owned ? 'owned' : broke ? 'broke' : ''}">${status}</span></button>`;
+    }).join('');
+  }
+
+  // Ficha do item em foco e a vitrine 3D (carro, carro preparado ou carro com a peça aplicada).
+  renderShopInfo() {
+    const items = this.items();
+    const el = items[this.focusIndex.bodyshop ?? 0];
+    const idx = el?.dataset.action?.startsWith('shop:') ? Number(el.dataset.action.slice(5)) : 0;
+    const it = this.shopItems?.[idx];
+    const info = document.getElementById('shop-info');
+    if (!it) { info.innerHTML = ''; return; }
+    const p = loadProfile();
+    const car = CARS.find((c) => c.id === it.car) ?? CARS[0];
+    let html = `<h3>${it.name}</h3>`;
+    if (it.kind === 'car') {
+      const s = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id]) });
+      html += `<p class="note spec-desc">${t(car.description)}</p>
+        <p class="note">${t('{power} cv · {torque} N·m · {mass} kg · {ratio} kg/cv', { power: s.power, torque: s.torque, mass: s.mass, ratio: s.ratio.toFixed(1) })}</p>
+        <p class="note">${it.owned ? t('Já está na sua garagem. Enter coloca na pista.') : t('Comprar por ¥ {price}.', { price: formatPoints(it.price) })}</p>`;
+    } else if (it.kind === 'upgrade') {
+      const before = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id]) });
+      const next = Math.min(it.max, it.level + 1);
+      const after = carSpecs({ ...car, params: upgradedParams(car, { ...(p.upgrades?.[car.id] || {}), [it.id]: next }) });
+      html += `<p class="note spec-desc">${t(it.upgrade.description)}</p>
+        <p class="note">${t('Estágio {n} de {max} em {car}.', { n: it.level, max: it.max, car: t(car.name) })}</p>
+        ${it.owned ? `<p class="note">${t('Preparação no máximo.')}</p>` : `<p class="note">${t('Próximo estágio: ¥ {price}', { price: formatPoints(it.price) })}${after.power !== before.power ? ` · ${before.power} → ${after.power} cv` : ''}${after.mass !== before.mass ? ` · ${before.mass} → ${after.mass} kg` : ''}</p>`}`;
+    } else {
+      const a = it.medal ? achievementById(it.medal) : null;
+      html += `<p class="note">${it.sub}${a ? ` · ${t('também sai com a medalha {name}', { name: a.name })}` : ` · ${t('exclusivo do BODYSHOP')}`}</p>
+        <p class="note">${it.owned ? t('Liberado: escolha na GARAGEM de qualquer carro.') : t('Comprar por ¥ {price}. Vale para todos os carros.', { price: formatPoints(it.price) })}</p>`;
+    }
+    info.innerHTML = html;
+    document.getElementById('shop-preview-caption').textContent = t(car.name);
+    // Peça: a vitrine mostra o carro atual já com ela; senão, o carro do item com o visual dele.
+    const look = it.kind === 'part' ? { ...loadGarage(car.id, this.unlocked), [it.slot]: it.id } : null;
+    this.handlers.onShopPreview?.(car.id, look);
+  }
+
+  shopAction(i) {
+    const it = this.shopItems?.[i];
+    if (!it) return;
+    const msg = document.getElementById('shop-msg');
+    // Carro que já é seu: Enter põe ele na pista.
+    if (it.kind === 'car' && it.owned) {
+      this.settings.car = it.id;
+      this.garage = loadGarage(it.id, this.unlocked);
+      writeJSON(SETTINGS_KEY, this.settings);
+      this.handlers.onSettings?.({ ...this.settings });
+      msg.textContent = t('{car} na pista.', { car: it.name });
+    } else if (it.owned) {
+      this.flashEl(this.items()[this.focusIndex.bodyshop ?? 0]);
+      return;
+    } else if (!this.handlers.onBuy?.(it)) {
+      this.flashEl(this.items()[this.focusIndex.bodyshop ?? 0]);
+      msg.textContent = t('Saldo insuficiente: faltam ¥ {money}.', { money: formatPoints(it.price - loadProfile().money) });
+      return;
+    } else {
+      msg.textContent = it.kind === 'car' ? t('{car} comprado! Já está na sua garagem.', { car: it.name })
+        : it.kind === 'upgrade' ? t('{name} estágio {n} instalado.', { name: it.name, n: it.level + 1 })
+        : t('{name} liberado na GARAGEM.', { name: it.name });
+    }
+    const keep = this.focusIndex.bodyshop;
+    this.buildShop();
+    this.setFocus(keep ?? 0);
+  }
 
   // Traçado de uma pista, só para o desenho da prévia.
   trackShape(id) {
@@ -249,12 +392,53 @@ export class Menu {
     this.focusIndex[this.current] = index;
     items.forEach((el, k) => el.classList.toggle('focused', k === index));
     items[index].scrollIntoView?.({ block: 'nearest' });
+    // Troca de item (não a primeira vez na tela): cursor desliza, item acende e o painel bipa.
+    const el = items[index];
+    const moved = this.focusedEl && this.focusedEl !== el && this.cursorScreen === this.current;
+    if (el !== this.focusedEl) {
+      el.classList.remove('focus-in');
+      void el.offsetWidth; // reinicia a animação
+      el.classList.add('focus-in');
+      clearTimeout(el.focusTimer);
+      el.focusTimer = setTimeout(() => el.classList.remove('focus-in'), 450);
+      if (moved) this.handlers.onNav?.('move');
+    }
+    this.focusedEl = el;
+    this.placeCursor(!moved);
+    // A lista pode ter rolado para mostrar o item: confere de novo no quadro seguinte.
+    requestAnimationFrame(() => { if (this.focusedEl === el) this.placeCursor(false, false); });
+    if (this.current === 'bodyshop') this.renderShopInfo();
+  }
+
+  // Moldura do cursor sobre o item em foco. jump: sem deslizar (tela nova, rolagem, janela mudou).
+  placeCursor(jump = false, pop = !jump) {
+    const cursor = this.cursor ??= document.getElementById('menu-cursor');
+    const el = this.focusedEl;
+    if (!cursor) return;
+    if (!el || !this.visible || !el.offsetParent) { cursor.classList.remove('on'); return; }
+    const r = el.getBoundingClientRect();
+    cursor.classList.toggle('jump', jump);
+    cursor.style.transform = `translate(${r.left}px, ${r.top}px)`;
+    cursor.style.width = `${r.width}px`;
+    cursor.style.height = `${r.height}px`;
+    cursor.classList.add('on');
+    if (pop) {
+      cursor.classList.remove('pop');
+      void cursor.offsetWidth;
+      cursor.classList.add('pop');
+    }
+    this.cursorScreen = this.current;
   }
 
   show(name) {
     // Controles fica dentro das configurações: voltar dele leva às configurações, e delas para onde se estava (menu ou pausa)
     if (name === 'config' && this.current && this.current !== 'controls' && this.current !== 'config') this.previous = this.current;
     if (name === 'garage') { this.garage = loadGarage(this.settings.car, this.unlocked); this.garagePeek = {}; }
+    if (name === 'bodyshop') {
+      this.shopCar = ownsCar(loadProfile(), this.settings.car) ? this.settings.car : this.ownedCars()[0].id;
+      document.getElementById('shop-msg').textContent = '';
+      this.buildShop();
+    }
     // Tela de título: anima o logo ao abrir o jogo e ao voltar de uma corrida
     if (name === 'main' && (!this.titleShown || this.current === null || this.current === 'pause' || this.current === 'results')) {
       this.titleShown = true;
@@ -265,6 +449,7 @@ export class Menu {
       this.titleTimer = setTimeout(() => document.body.classList.remove('title-anim'), 2200);
     } else if (name !== 'main') document.body.classList.remove('title-anim');
     this.current = name;
+    this.focusedEl = null;
     this.root.hidden = false;
     for (const [key, screen] of Object.entries(this.screens)) screen.hidden = key !== name;
     document.body.dataset.menu = name;
@@ -276,12 +461,23 @@ export class Menu {
   hide() {
     this.current = null;
     this.root.hidden = true;
+    this.cursor?.classList.remove('on');
     document.body.dataset.menu = '';
   }
 
   // Ações de um frame vindas do Input.
   handle(a) {
     if (!this.visible) return;
+    // Nas configurações, LB/RB (ou Q/E) trocam de aba de qualquer lugar da tela.
+    if (this.current === 'bodyshop' && (a.shiftUp || a.shiftDown)) {
+      this.action(`shop-tab:${(this.shopTab + (a.shiftUp ? 1 : 2)) % 3}`);
+      return;
+    }
+    if (this.current === 'config' && (a.shiftUp || a.shiftDown)) {
+      this.showConfigTab(this.configTab + (a.shiftUp ? 1 : -1));
+      this.render();
+      return;
+    }
     const items = this.items();
     const index = this.focusIndex[this.current] ?? 0;
     // Cima/baixo: ordem da lista, pulando quem está na mesma linha (botões lado a lado)
@@ -339,7 +535,7 @@ export class Menu {
   back() {
     if (this.current === 'controls') this.show('config');
     else if (this.current === 'config') this.show(this.previous);
-    else if (this.current === 'single' || this.current === 'profile') this.show('main');
+    else if (this.current === 'single' || this.current === 'profile' || this.current === 'bodyshop') this.show('main');
     else if (this.current === 'garage') this.show('single');
     else if (this.current === 'ranking') this.show('single');
     else if (this.current === 'pause') this.handlers.onResume();
@@ -349,6 +545,7 @@ export class Menu {
     const s = this.selectors[key];
     const count = s.count();
     if (count < 2) return this.flash(key);
+    this.handlers.onNav?.('change');
     let i = s.index() + dir;
     if (s.wrap === false) i = Math.max(0, Math.min(count - 1, i));
     else i = (i + count) % count;
@@ -369,6 +566,15 @@ export class Menu {
     writeJSON(SETTINGS_KEY, this.settings);
     this.handlers.onSettings?.({ ...this.settings });
     this.render();
+  }
+
+  // Abas das configurações: só o grupo da aba escolhida fica à vista (e navegável).
+  showConfigTab(i) {
+    this.configTab = (i + CONFIG_GROUPS.length) % CONFIG_GROUPS.length;
+    this.configBoxes.forEach((box, k) => { box.hidden = k !== this.configTab; });
+    for (const [k, tab] of [...document.getElementById('config-tabs').children].entries()) {
+      tab.dataset.on = String(k === this.configTab);
+    }
   }
 
   // Só uma opção disponível: pisca o seletor.
@@ -392,6 +598,14 @@ export class Menu {
     if (name === 'garage') this.show('garage');
     if (name === 'ranking') this.show('ranking');
     if (name === 'profile') this.show('profile');
+    if (name === 'bodyshop') this.show('bodyshop');
+    if (name.startsWith('shop:')) this.shopAction(Number(name.slice(5)));
+    if (name.startsWith('shop-tab:')) {
+      this.shopTab = Number(name.slice(9));
+      document.getElementById('shop-msg').textContent = '';
+      this.buildShop();
+      this.renderShopInfo();
+    }
     if (name === 'garage-reset') {
       this.garage = { ...DEFAULT_GARAGE };
       this.garagePeek = {};
@@ -406,6 +620,20 @@ export class Menu {
       this.config = { ...DEFAULT_CONFIG };
       saveConfig(this.config);
       this.handlers.onConfig?.({ ...this.config });
+      this.render();
+    }
+    if (name.startsWith('config-tab:')) {
+      this.showConfigTab(Number(name.split(':')[1]));
+      this.render();
+    }
+    if (name === 'repair') {
+      const p = loadProfile();
+      const cost = ProfileTracker.repairCost(ProfileTracker.damageOf(p, this.settings.car));
+      if (!cost) return;
+      if (!this.handlers.onRepair || cost > p.money || !this.handlers.onRepair(cost)) {
+        this.flashEl(document.getElementById('repair-btn'));
+        return;
+      }
       this.render();
     }
     if (name === 'back') this.back();
@@ -483,6 +711,8 @@ export class Menu {
         ${stat('MAIOR ÂNGULO', `${Math.round(p.maxAngle)}°`, 'amber')}
         ${stat('DRIFT MAIS LONGO', `${Math.round(p.longestDrift).toLocaleString(locale())} m`)}
         ${stat('BATIDAS NA MURETA', p.wallHits)}
+        ${stat('DINHEIRO', `¥ ${formatPoints(p.money)}`, 'amber')}
+        ${stat('GANHO NA CARREIRA', `¥ ${formatPoints(p.earned)}`)}
         ${stat('PISTA FAVORITA', favTrack, 'small')}
         ${stat('CARRO FAVORITO', favCar, 'small')}
       </div>
@@ -533,6 +763,7 @@ export class Menu {
     const track = randomTrack ? null : trackById(this.settings.track);
     const car = CARS.find((c) => c.id === this.settings.car);
     document.getElementById('garage-car').textContent = `${t(car.name)} · ${car.jp}`;
+    this.renderMoney();
     this.renderRanking(car);
     if (this.current === 'profile') this.renderProfile();
     document.getElementById('track-info').textContent = randomTrack
@@ -625,7 +856,7 @@ export class Menu {
   }
 
   drawSpecs(car) {
-    const s = carSpecs(car);
+    const s = carSpecs({ ...car, params: upgradedParams(car, loadProfile().upgrades?.[car.id]) });
     const bar = (value, max) => {
       const on = Math.round(Math.max(0, Math.min(1, value / max)) * 16);
       return `<span class="spec-bar">${'<i class="on"></i>'.repeat(on)}${'<i></i>'.repeat(16 - on)}</span>`;
@@ -638,6 +869,20 @@ export class Menu {
       <div class="spec"><span>${t('PESO/POT.')}</span>${bar(12 - s.ratio, 10)}<b>${s.ratio.toFixed(1)} kg/${t('cv')}</b></div>
       <div class="spec"><span>${t('TRAÇÃO')}</span><span class="spec-text">${t('TRASEIRA · {gears} MARCHAS · {front}% NA FRENTE', { gears: s.gears, front: Math.round(s.frontWeight * 100) })}</span></div>
       <div class="spec"><span>${t('MOTOR')}</span><span class="spec-text">${t(ENGINE_PROFILES[car.engine]?.name ?? '')}</span></div>`;
+  }
+
+  // Dinheiro e estado da lataria na garagem (o conserto é pago aqui).
+  renderMoney() {
+    const p = loadProfile();
+    const cost = ProfileTracker.repairCost(ProfileTracker.damageOf(p, this.settings.car));
+    const money = document.getElementById('garage-money');
+    money.innerHTML = cost > 0
+      ? `${t('¥ {money}', { money: formatPoints(p.money) })} · <span class="${cost > p.money ? 'broke' : ''}">${t('lataria: conserto por ¥ {cost}', { cost: formatPoints(cost) })}</span>`
+      : t('¥ {money} · lataria sem avarias', { money: formatPoints(p.money) });
+    const btn = document.getElementById('repair-btn');
+    btn.hidden = cost <= 0;
+    btn.textContent = t('REPARAR ¥ {cost}', { cost: formatPoints(cost) });
+    btn.classList.toggle('disabled', cost > p.money);
   }
 
   // --- Pausa e resultado --------------------------------------------------------------------------
@@ -657,7 +902,7 @@ export class Menu {
     return readJSON(RECORDS_KEY, {})[this.recordKey()] || null;
   }
 
-  showResults({ laps, total, bestCombo, time, difficulty, bestLap, standings = [], grades = null, rankBest = 0, achievements = [] }) {
+  showResults({ laps, total, bestCombo, time, difficulty, bestLap, standings = [], grades = null, rankBest = 0, achievements = [], prize = 0, repair = 0 }) {
     const records = readJSON(RECORDS_KEY, {});
     const raced = this.active ?? this.settings;
     const key = this.recordKey(raced.track);
@@ -680,6 +925,7 @@ export class Menu {
       <p class="results-sub">${t(track.name)} · ${t(car.name)} · ${t(DIFFICULTIES[difficulty].label)}</p>
       ${standings.length > 1 ? `<p class="results-record" style="animation:none">${t('{pos}º LUGAR', { pos: position })}</p>` : ''}
       <div class="results-total"><span>${t('TOTAL')}</span><b>${formatPoints(total)}</b><small>pts</small></div>
+      <p class="results-money">${t('PRÊMIO ¥ {prize}', { prize: formatPoints(prize) })} · ${t('caixa ¥ {money}', { money: formatPoints(loadProfile().money) })}${repair > 0 ? ` · <span class="broke">${t('conserto ¥ {cost}', { cost: formatPoints(repair) })}</span>` : ''}</p>
       ${isRecord ? `<p class="results-record">${t('NOVO RECORDE')}</p>` : previous ? `<p class="note">${t('Recorde: {points} pts', { points: formatPoints(previous.points) })}</p>` : ''}
       ${standingsHtml}
       <div class="scroll"><table class="results-table">

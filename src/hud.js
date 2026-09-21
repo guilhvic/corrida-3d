@@ -21,11 +21,10 @@ export class Hud {
   constructor(track) {
     this.el = {
       lap: $('hud-lap'), lapTime: $('hud-lap-time'),
-      last: $('hud-last'), best: $('hud-best'), total: $('hud-total'),
       combo: $('combo'), comboAngleText: $('combo-angle'), feed: $('combo-feed'), popup: $('popup'),
       mode: $('hud-mode'), shift: $('hud-shift'),
       fps: $('hud-fps'), pad: $('hud-pad'), toast: $('toast'),
-      tcs: $('hud-tcs'), abs: $('hud-abs'), drift: $('hud-drift'), level: $('hud-level'), reverse: $('hud-reverse'),
+      reverse: $('hud-reverse'),
     };
     this.lapPoints = new SegDisplay($('hud-lap-points'), 7, { className: 'green' });
     this.speed = new SegDisplay($('hud-speed'), 3, { className: 'green' });
@@ -40,9 +39,6 @@ export class Hud {
     this.tach = new SegBar(tach, 40, { zones });
     this.tach.items.forEach((bar, i) => bar.style.setProperty('--h', `${22 + (i / 39) ** 1.4 * 78}%`));
 
-    this.throttle = new SegBar($('hud-throttle'), 10);
-    this.brake = new SegBar($('hud-brake'), 10);
-    this.steer = new SegBar($('hud-steer'), 21, { centered: true });
     this.angleBar = new SegBar($('combo-angle-bar'), 24, { zones: (t) => (t > 0.5 ? 'amber' : t > DRIFT.minAngle / 90 ? 'green' : 'dim') });
     this.multBar = new SegBar($('combo-mult-bar'), 12);
 
@@ -121,15 +117,12 @@ export class Hud {
     dot(car.x, car.z, '#ffb13b', 3.5);
   }
 
-  update(car, timer, scorer, { fps, ghost, padName, difficulty, totalLaps = 0, rivals = [] }) {
+  update(car, timer, scorer, { fps, ghost, padName, totalLaps = 0, rivals = [] }) {
     const e = this.el;
     const lapText = totalLaps ? t('VOLTA {lap}/{laps}', { lap: Math.min(timer.lap, totalLaps), laps: totalLaps }) : t('VOLTA {lap}', { lap: String(timer.lap).padStart(2, '0') });
     setText(e.lap, timer.lap === 0 ? t('SAÍDA') : lapText);
     setText(e.lapTime, timer.lap === 0 ? '-:--.--' : formatTime(timer.time).slice(0, -1));
     this.lapPoints.set(Math.round(scorer.lapPoints));
-    setText(e.last, timer.lastLap ? formatPoints(timer.lastLap.points) : '-------');
-    setText(e.best, timer.bestLap ? formatPoints(timer.bestLap.points) : '-------');
-    setText(e.total, formatPoints(scorer.total));
 
     // Combo
     e.combo.classList.toggle('show', scorer.active);
@@ -149,16 +142,6 @@ export class Hud {
     this.tach.set(car.rpm / TACH_MAX);
     setLamp(e.shift, car.limiter ? 'blink' : car.rpm > paramsOf(car).upshiftRpm - 300 ? 'on' : 'off');
     setLamp(e.reverse, car.gear === -1 ? 'on' : 'off');
-
-    this.throttle.set(car.throttle);
-    this.brake.set(car.brake);
-    this.steer.set(car.steer / paramsOf(car).maxLock);
-
-    setLamp(e.level, car.driftMode ? 'active' : 'on');
-    setText(e.level, difficulty);
-    setLamp(e.drift, car.driftAssist ? 'on' : 'off');
-    setLamp(e.tcs, !car.tcs ? 'off' : car.tcsActive ? 'active' : 'on');
-    setLamp(e.abs, !car.abs ? 'off' : car.absActive ? 'active' : 'on');
 
     setText(e.fps, `${Math.round(fps)} FPS`);
     e.pad.hidden = !padName;

@@ -13,37 +13,43 @@ const volume = (key, label, def) => ({
 const onOff = (key, label, def) => ({ key, label, def, values: [true, false], format: (v) => (v ? t('LIGADO') : t('DESLIGADO')) });
 
 export const CONFIG_GROUPS = [
-  { title: 'ÁUDIO', options: [
+  { title: 'ÁUDIO', jp: '音', options: [
     volume('master', 'GERAL', 0.8),
     volume('music', 'MÚSICA', 0.6),
     onOff('musicOn', 'TRILHA', true),
     volume('engine', 'MOTOR', 0.8),
     volume('rivals', 'RIVAIS', 0.7),
     volume('effects', 'EFEITOS', 0.8),
+    volume('ambience', 'AMBIENTE', 0.7),
     volume('narrator', 'NARRADOR', 0.9),
   ] },
-  { title: 'VÍDEO', options: [
+  { title: 'VÍDEO', jp: '映像', options: [
     { key: 'resolution', label: 'RESOLUÇÃO', def: 540, values: [360, 480, 540, 720, 0],
       format: (v) => (v === 0 ? t('NATIVA') : t('{n} LINHAS', { n: v })), hint: (v) => t(v === 540 ? 'padrão PS2 tardio' : v === 0 ? 'mais nítido, mais pesado' : v < 540 ? 'mais leve e serrilhado' : 'mais nítido') },
     onOff('crt', 'EFEITO CRT', true),
     onOff('mist', 'NÉVOA', true),
     { key: 'trail', label: 'RASTRO', def: 1, values: [0, 0.5, 1, 1.5], format: (v) => t(['DESLIGADO', 'SUAVE', 'NORMAL', 'FORTE'][[0, 0.5, 1, 1.5].indexOf(v)]), hint: () => t('borrão de movimento dos quadros anteriores') },
     { key: 'fov', label: 'VISÃO', def: 0, values: [-8, -4, 0, 4, 8, 12], format: (v) => `${62 + v}°`, hint: () => t('campo de visão da câmera') },
-    onOff('fps', 'FPS', true),
+    onOff('fullscreen', 'TELA CHEIA', false),
   ] },
-  { title: 'JOGO', options: [
-    { key: 'camera', label: 'CÂMERA', def: 0, values: [0, 1, 2], format: (v) => t(['PERSEGUIÇÃO', 'DISTANTE', 'CAPÔ'][v]), hint: () => t('câmera ao largar (C troca na corrida)') },
+  { title: 'CORRIDA', jp: '走行', options: [
+    { key: 'camera', label: 'CÂMERA', def: 0, values: [0, 1, 2, 3], format: (v) => t(['PERSEGUIÇÃO', 'DISTANTE', 'CAPÔ', 'COCKPIT'][v]), hint: () => t('câmera ao largar (C troca na corrida)') },
     { key: 'gearbox', label: 'CÂMBIO', def: 'auto', values: ['auto', 'manual'], format: (v) => t(v === 'auto' ? 'AUTOMÁTICO' : 'MANUAL (Q/E)') },
     { key: 'units', label: 'UNIDADE', def: 'kmh', values: ['kmh', 'mph'], format: (v) => (v === 'kmh' ? 'KM/H' : 'MPH') },
     onOff('rumble', 'VIBRAÇÃO', true),
     onOff('ghost', 'FANTASMA', true),
+    onOff('intro', 'SOBREVOO', true),
+  ] },
+  { title: 'INTERFACE', jp: '表示', options: [
+    { key: 'hudScale', label: 'TAMANHO', def: 1, values: [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3], format: (v) => `${Math.round(v * 100)}%`,
+      hint: () => t('tamanho dos painéis na corrida') },
     onOff('grades', 'NOTAS', true),
     onOff('driftTrail', 'RASTRO DRIFT', true),
     onOff('names', 'NOMES', true),
     onOff('minimap', 'MINIMAPA', true),
-    onOff('intro', 'SOBREVOO', true),
+    onOff('fps', 'FPS', true),
   ] },
-  { title: 'IDIOMA · LANGUAGE', options: [
+  { title: 'IDIOMA', jp: '言語', options: [
     { key: 'lang', label: 'TEXTOS', def: defaultLang(), values: ['pt', 'en'], format: (v) => (v === 'pt' ? 'PORTUGUÊS' : 'ENGLISH'), hint: () => t('textos do mapa e narrador em japonês') },
   ] },
 ];

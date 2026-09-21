@@ -3,5 +3,6 @@
 import { kaze180 } from './cars/kaze180.js';
 import { seiran } from './cars/seiran.js';
 import { tsubame } from './cars/tsubame.js';
+import { kaminari86 } from './cars/kaminari86.js';
 
-export const DESIGNS = { kaze180, seiran, tsubame };
+export const DESIGNS = { kaze180, seiran, tsubame, kaminari86 };
