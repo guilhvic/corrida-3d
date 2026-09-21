@@ -1,7 +1,7 @@
 // Menus: tela inicial (modos), singleplayer (pista, carro, voltas, grid, dificuldade), garagem, ranking, perfil do piloto,
 // configurações, controles, pausa e resultado.
 // Navega com mouse, teclado (setas/WASD, Enter, Esc) ou controle (D-pad/analógico, A, B).
-import { TRACKS, CARS, LAP_OPTIONS, carSpecs, trackById, timeOf } from './catalog.js';
+import { TRACKS, CARS, LAP_OPTIONS, PRACTICE, carSpecs, trackById, timeOf } from './catalog.js';
 import { MAX_RACERS } from './race.js';
 import { DIFFICULTIES, DIFFICULTY_ORDER } from './difficulty.js';
 import { ENGINE_PROFILES } from './engine-dsp.js';
@@ -61,6 +61,9 @@ export class Menu {
       laps: LAP_OPTIONS.includes(saved.laps) ? saved.laps : 3,
       racers: Number.isInteger(saved.racers) && saved.racers >= 1 && saved.racers <= MAX_RACERS ? saved.racers : 4,
       ghost: typeof saved.ghost === 'string' ? saved.ghost : 'best', // 'best', 'none' ou id de uma volta do ranking
+      // Modo do singleplayer: corrida numa pista ou treino no estacionamento (com o horário próprio dele)
+      mode: saved.mode === 'practice' ? 'practice' : 'race',
+      practiceTime: timeOf(PRACTICE, saved.practiceTime).id,
     };
 
     // Horário aleatório vale com qualquer pista; pista aleatória sempre sorteia o horário também
@@ -71,6 +74,12 @@ export class Menu {
 
     // Cada seletor: lista de opções, índice atual e como mostrar. Pista e horário têm ALEATÓRIA/ALEATÓRIO no fim.
     this.selectors = {
+      mode: {
+        count: () => 2,
+        index: () => (this.practice ? 1 : 0),
+        set: (i) => { this.settings.mode = i === 1 ? 'practice' : 'race'; },
+        label: (i) => (i === 1 ? [t('ESTACIONAMENTO'), t('treino com cones, sem cronômetro nem rivais')] : [t('CORRIDA'), t('pista, voltas e rivais de IA')]),
+      },
       track: {
         count: () => TRACKS.length + 1,
         index: () => (this.settings.track === RANDOM ? TRACKS.length : TRACKS.findIndex((t) => t.id === this.settings.track)),
@@ -82,17 +91,21 @@ export class Menu {
         },
         label: (i) => (i === TRACKS.length ? [t('ALEATÓRIA'), t('sorteada entre as {n} a cada largada', { n: TRACKS.length })] : [t(TRACKS[i].name), TRACKS[i].jp]),
       },
+      // No treino o horário é o do estacionamento (sem sorteio)
       time: {
-        count: () => (this.settings.track === RANDOM ? 1 : trackById(this.settings.track).times.length + 1),
+        count: () => (this.practice ? PRACTICE.times.length : this.settings.track === RANDOM ? 1 : trackById(this.settings.track).times.length + 1),
         index: () => {
+          if (this.practice) return Math.max(0, PRACTICE.times.findIndex((tm) => tm.id === this.settings.practiceTime));
           if (this.settings.time === RANDOM) return this.selectors.time.count() - 1;
           return trackById(this.settings.track).times.findIndex((t) => t.id === this.settings.time);
         },
         set: (i) => {
+          if (this.practice) { this.settings.practiceTime = PRACTICE.times[i].id; return; }
           const times = trackById(this.settings.track).times;
           this.settings.time = this.settings.track === RANDOM || i === times.length ? RANDOM : times[i].id;
         },
         label: (i) => {
+          if (this.practice) return [t(PRACTICE.times[i].name), PRACTICE.times[i].jp];
           if (this.settings.track === RANDOM || i === trackById(this.settings.track).times.length) return [t('ALEATÓRIO'), t('sorteado a cada largada')];
           const time = trackById(this.settings.track).times[i];
           return [t(time.name), time.jp];
@@ -248,6 +261,8 @@ export class Menu {
 
   get visible() { return this.current !== null; }
 
+  get practice() { return this.settings.mode === 'practice'; }
+
   // Conquistas liberadas (lidas do perfil salvo)
   get unlocked() { return garageUnlocks(loadProfile()); }
 
@@ -374,6 +389,8 @@ export class Menu {
   // Configuração da corrida com pista e horário aleatórios já sorteados
   resolved() {
     const s = { ...this.settings };
+    // Treino: o lugar é sempre o estacionamento, sozinho e sem chegada.
+    if (this.practice) return { ...s, track: PRACTICE.id, time: s.practiceTime, laps: 0, racers: 1 };
     if (s.track === RANDOM) s.track = TRACKS[Math.floor(Math.random() * TRACKS.length)].id;
     const times = trackById(s.track).times;
     if (s.time === RANDOM) s.time = times[Math.floor(Math.random() * times.length)].id;
@@ -758,6 +775,9 @@ export class Menu {
       el.classList.toggle('single', s.count() < 2);
     }
     document.getElementById('difficulty-text').textContent = t(DIFFICULTIES[this.difficulty].description);
+    for (const key of ['track', 'laps', 'racers']) this.root.querySelector(`.selector[data-key="${key}"]`).hidden = this.practice;
+    document.getElementById('start-btn').textContent = t(this.practice ? 'INICIAR TREINO' : 'INICIAR CORRIDA');
+    document.getElementById('track-caption').textContent = t(this.practice ? 'LOCAL' : 'PISTA');
 
     const randomTrack = this.settings.track === RANDOM, randomTime = this.settings.time === RANDOM;
     const track = randomTrack ? null : trackById(this.settings.track);
@@ -766,6 +786,7 @@ export class Menu {
     this.renderMoney();
     this.renderRanking(car);
     if (this.current === 'profile') this.renderProfile();
+    if (this.practice) { this.renderPractice(car); return; }
     document.getElementById('track-info').textContent = randomTrack
       ? t('Pista e horário sorteados a cada largada entre: {list}.', { list: TRACKS.map((tr) => t(tr.name).toLowerCase()).join(', ') })
       : `${Math.round(this.previewTrack.length)} m · ${t(track.description)} ${randomTime ? t('Horário sorteado a cada largada ({list}).', { list: track.times.map((tm) => t(tm.name).toLowerCase()).join(', ') }) : t(timeOf(track, this.settings.time).description)}`;
@@ -777,6 +798,44 @@ export class Menu {
       ? t('Treino livre: sem chegada, voltas contam para o recorde de volta.')
       : randomTrack ? t('Pista aleatória: o recorde fica salvo na pista sorteada.')
         : record ? t('Recorde ({laps}): {points} pts', { laps: lapLabel(this.settings.laps).toLowerCase(), points: formatPoints(record.points) }) : t('Sem recorde nesta configuração ainda.');
+  }
+
+  // Singleplayer no modo treino: o estacionamento visto de cima, com os cones das estações.
+  renderPractice(car) {
+    const lot = this.trackShape(PRACTICE.id).lot;
+    const time = timeOf(PRACTICE, this.settings.practiceTime);
+    document.getElementById('track-info').textContent = `${t(PRACTICE.name)} · ${t(PRACTICE.description)} ${t(time.description)}`;
+    document.getElementById('record-line').textContent = t('Treino: R volta para a saída, arruma os cones e conserta o carro. Nada aqui gasta a lataria de verdade.');
+    document.getElementById('ghost-line').textContent = '';
+    this.drawSpecs(car);
+    const canvas = document.getElementById('track-preview');
+    const ctx = canvas.getContext('2d');
+    const { width: w, height: h } = canvas;
+    const { rect, cones, spawn } = lot;
+    const pad = 16;
+    const s = Math.min((w - pad * 2) / (rect.maxX - rect.minX), (h - pad * 2) / (rect.maxZ - rect.minZ));
+    const ox = (w - (rect.maxX - rect.minX) * s) / 2, oz = (h - (rect.maxZ - rect.minZ) * s) / 2;
+    const project = (px, pz) => [ox + (rect.maxX - px) * s, oz + (rect.maxZ - pz) * s]; // igual ao minimapa
+    ctx.clearRect(0, 0, w, h);
+    const [x0, y0] = project(rect.maxX, rect.maxZ), [x1, y1] = project(rect.minX, rect.minZ);
+    ctx.fillStyle = 'rgba(61,255,196,0.06)';
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.strokeStyle = '#3dffc4';
+    ctx.shadowColor = '#3dffc4';
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ff7a2a';
+    for (const c of cones) {
+      const [cx, cy] = project(c.x, c.z);
+      ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    }
+    const [sx, sy] = project(spawn.x, spawn.z);
+    ctx.fillStyle = '#ffb13b';
+    ctx.fillRect(sx - 4, sy - 7, 8, 14);
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText(t('SAÍDA'), sx + 9, sy + 5);
   }
 
   drawTrack() {
@@ -886,7 +945,12 @@ export class Menu {
   }
 
   // --- Pausa e resultado --------------------------------------------------------------------------
-  showPause({ lap, laps, total, time, position, racers }) {
+  showPause({ lap, laps, total, time, position, racers, practice = null }) {
+    if (practice) {
+      document.getElementById('pause-info').textContent = `${t('treino no estacionamento')} · ${formatPoints(total)} pts · ${t(practice.cones === 1 ? '{n} cone derrubado' : '{n} cones derrubados', { n: practice.cones })}`;
+      this.show('pause');
+      return;
+    }
     const lapText = lap === 0 ? t('volta de saída') : laps ? t('volta {lap} de {laps}', { lap: Math.min(lap, laps), laps }) : t('volta {lap} (treino livre)', { lap });
     const posText = racers > 1 ? ` · ${t('{pos}º de {n}', { pos: position, n: racers })}` : '';
     document.getElementById('pause-info').textContent = `${lapText}${posText} · ${formatPoints(total)} pts · ${formatTime(time).slice(0, -1)}`;

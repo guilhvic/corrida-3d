@@ -1,5 +1,5 @@
 // Pós-processamento "era PS2": cena em ~540 linhas, bloom, rastro de quadros anteriores (motion blur por
-// feedback) e pontilhado de cor. A última passada roda na resolução da tela para o efeito CRT
+// feedback), desfoque de movimento (radial com a velocidade e na direção em que a câmera gira) e pontilhado de cor. A última passada roda na resolução da tela para o efeito CRT
 // (scanlines leves, grade de fósforo, curvatura e aberração cromática) ficar nítido.
 import * as THREE from 'three';
 
@@ -30,12 +30,23 @@ const blur = `
     gl_FragColor = vec4(sum, 1.0);
   }`;
 
+// radial: quanto a imagem "estica" a partir do centro (velocidade); shift: quanto a cena andou na tela durante a
+// exposição (câmera girando ou tremendo). O centro da tela fica nítido; as bordas borram mais.
 const composite = `
   uniform sampler2D tScene; uniform sampler2D tBloom; uniform sampler2D tPrev;
-  uniform float bloomStrength; uniform float trail; varying vec2 vUv;
+  uniform float bloomStrength; uniform float trail; uniform float radial; uniform vec2 shift; uniform vec2 center;
+  varying vec2 vUv;
   ${SAFE}
   void main(){
-    vec3 c = safeColor(texture2D(tScene, vUv).rgb) + safeColor(texture2D(tBloom, vUv).rgb) * bloomStrength;
+    vec2 d = vUv - center;
+    vec2 v = d * radial * smoothstep(0.08, 0.55, length(d)) + shift;
+    vec3 base;
+    if (dot(v, v) > 1e-7) {
+      base = vec3(0.0);
+      for (int i = 0; i < 10; i++) base += safeColor(texture2D(tScene, vUv - v * (float(i) / 9.0 - 0.5)).rgb);
+      base *= 0.1;
+    } else base = safeColor(texture2D(tScene, vUv).rgb);
+    vec3 c = base + safeColor(texture2D(tBloom, vUv).rgb) * bloomStrength;
     vec3 prev = safeColor(texture2D(tPrev, vUv).rgb);
     gl_FragColor = vec4(mix(c, prev, trail), 1.0);
   }`;
@@ -121,6 +132,7 @@ export class PS2Pipeline {
     this.compositeMat = make(composite, {
       tScene: { value: null }, tBloom: { value: null }, tPrev: { value: null },
       bloomStrength: { value: 0.55 }, trail: { value: 0.2 },
+      radial: { value: 0 }, shift: { value: new THREE.Vector2() }, center: { value: new THREE.Vector2(0.5, 0.52) },
     });
     this.outputMat = make(output, {
       tInput: { value: null }, resolution: { value: new THREE.Vector2() }, sourceSize: { value: new THREE.Vector2() }, crt: { value: 1 },
@@ -155,8 +167,8 @@ export class PS2Pipeline {
     this.renderer.render(this.quadScene, this.quadCamera);
   }
 
-  // trail: 0..1 quanto do quadro anterior fica na imagem.
-  render(scene, camera, { trail = 0.2 } = {}) {
+  // trail: 0..1 quanto do quadro anterior fica na imagem. radial e shift: desfoque de movimento (0 = desligado).
+  render(scene, camera, { trail = 0.2, radial = 0, shift = null } = {}) {
     const r = this.renderer;
     r.setRenderTarget(this.sceneTarget);
     r.render(scene, camera);
@@ -178,6 +190,8 @@ export class PS2Pipeline {
     u.tBloom.value = this.bloomA.texture;
     u.tPrev.value = prev.texture;
     u.trail.value = this.frame === 0 ? 0 : trail;
+    u.radial.value = radial;
+    if (shift) u.shift.value.copy(shift); else u.shift.value.set(0, 0);
     this.pass(this.compositeMat, next);
 
     this.outputMat.uniforms.tInput.value = next.texture;

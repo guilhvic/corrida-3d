@@ -1,6 +1,7 @@
 // Pistas e carros disponíveis no menu.
 import { CAR, engineTorque } from './physics.js';
 import { buildTrack, FUJIMI_POINTS, HAKONE_POINTS } from './track.js';
+import { buildLotTrack } from './lotLayout.js';
 
 // world: qual cenário o main.js monta para a pista (world.js = cidade, worldFujimi.js = interior, worldHakone.js = serra).
 export const TRACKS = [
@@ -44,7 +45,22 @@ export const TRACKS = [
   },
 ];
 
-export const trackById = (id) => TRACKS.find((t) => t.id === id) || TRACKS[0];
+// Treino no estacionamento: um lugar, não uma pista (fica fora da lista de pistas, do sorteio e do ranking).
+export const PRACTICE = {
+  id: 'lot',
+  name: 'ESTACIONAMENTO DO PORTO',
+  jp: 'ドリフト練習場',
+  description: 'Pátio aberto atrás dos armazéns, com cones montados em oito, slalom, grampo e pião. Sem cronômetro, sem rivais e sem desgaste.',
+  world: 'lot',
+  practice: true,
+  times: [
+    { id: 'noite', name: 'NOITE', jp: '夜', description: 'Torres de luz acesas sobre o pátio vazio.' },
+    { id: 'dia', name: 'DIA', jp: '昼', description: 'Céu aberto, com o movimento do porto ao fundo.' },
+  ],
+  build: () => buildLotTrack(),
+};
+
+export const trackById = (id) => (id === PRACTICE.id ? PRACTICE : TRACKS.find((t) => t.id === id) || TRACKS[0]);
 export const timeOf = (track, id) => track.times.find((t) => t.id === id) || track.times[0];
 
 // params: acerto próprio de cada carro (o resto vem de CAR). a/b precisam bater com o design do modelo.

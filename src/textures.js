@@ -442,3 +442,52 @@ export function tactileTexture() {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+// Pátio de estacionamento (ladrilho de 20 x 20 m): asfalto velho e fosco, sem faixas, com remendos, rachaduras
+// seladas e manchas de óleo. As marcas grandes (borracha de pneu, pintura das vagas) ficam por cima (lot.js).
+export function lotTextures(seed = 101) {
+  const rand = mulberry32(seed);
+  const W = 512, H = 512, PX = W / 20;
+  const s = new Surface(W, H);
+  const blotch = valueNoise(rand, 5, 5), mid = valueNoise(rand, 36, 36), fine = valueNoise(rand, 128, 128);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = s.i(x, y), u = x / W, v = y / H, grain = rand();
+      const g = 0.21 + (blotch(u, v) - 0.5) * 0.07 + (mid(u, v) - 0.5) * 0.04 + (grain - 0.5) * 0.07 + (fine(u, v) - 0.5) * 0.03;
+      s.setGray(i, g, [1, 0.99, 0.97]);
+      s.height[i] = grain * 0.6 + mid(u, v) * 0.4;
+      s.spec[i] = 0.1 + (grain > 0.98 ? 0.3 : 0);
+    }
+  }
+  // Remendos retangulares (mais novos: escuros; mais velhos: claros e lisos)
+  for (let k = 0; k < 4; k++) {
+    const x0 = rand() * W, y0 = rand() * H, pw = (1.5 + rand() * 4) * PX, ph = (1.5 + rand() * 4) * PX;
+    const shade = rand() < 0.5 ? 0.78 : 1.2;
+    s.rect(x0, y0, x0 + pw, y0 + ph, (i, px, py) => {
+      for (let c = 0; c < 3; c++) s.col[i * 3 + c] *= shade;
+      s.height[i] = s.height[i] * 0.5 + 0.2;
+      if (px < x0 + 1 || px >= x0 + pw - 1 || py < y0 + 1 || py >= y0 + ph - 1) { s.setGray(i, 0.05); s.spec[i] = 0.7; s.height[i] = 0.7; }
+    });
+  }
+  // Rachaduras seladas com piche
+  for (let k = 0; k < 14; k++) {
+    let px = rand() * W, py = rand() * H, dir = rand() * Math.PI * 2;
+    const steps = 30 + rand() * 90;
+    for (let n = 0; n < steps; n++) {
+      dir += (rand() - 0.5) * 0.8;
+      px += Math.cos(dir) * 1.5; py += Math.sin(dir) * 1.5;
+      s.ellipse(px, py, 1.2, 1.2, (i) => { s.setGray(i, 0.04); s.spec[i] = 0.8; s.height[i] = 0.75; });
+    }
+  }
+  // Manchas de óleo de carro parado: escuras, brilhantes e com a borda irisada
+  for (let k = 0; k < 6; k++) {
+    const cx = rand() * W, cy = rand() * H, r = (0.3 + rand() * 0.6) * PX;
+    s.ellipse(cx, cy, r, r * (0.7 + rand() * 0.6), (i, px, py, t) => {
+      const a = clamp01((1 - t) * 2.5) * 0.6;
+      for (let c = 0; c < 3; c++) s.col[i * 3 + c] *= 1 - a;
+      s.spec[i] = s.spec[i] * (1 - a) + a * 0.9;
+      s.height[i] = s.height[i] * (1 - a) + 0.4 * a;
+    });
+  }
+  return s.textures({ normalStrength: 1.6 });
+}

@@ -417,7 +417,8 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     const beam = beams[name === 'farol-dir' ? 0 : 1];
     if (beam) beam.visible = false;
     const left = 2 - lampsOut.size;
-    if (headlightLight) { headlightLight.intensity = 90 * (left / 2); headlightLight.visible = left > 0; }
+    // Só a intensidade: esconder a luz muda a contagem de luzes da cena e o three recompila todos os materiais.
+    if (headlightLight) headlightLight.intensity = 90 * Math.max(0, left / 2);
     if (left <= 0 && mats.bulb?.color) mats.bulb.color.setRGB(0.05, 0.05, 0.05);
   };
   // Cofre do motor: só aparece quando o capô arranca.
@@ -573,7 +574,9 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     // Monta no carro, por um instante, o que só aparece numa batida (painel solto, cofre do motor), para o
     // jogo compilar esses shaders antes da primeira batida. Devolve a função que desfaz.
     warmup() {
-      const extra = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), panelMat);
+      // Um painel de verdade (mesmos atributos de geometria do que voa): um plano qualquer compila outra variante.
+      const first = ctx.breakables ? Object.keys(PANELS)[0] : null;
+      const extra = first ? panelMesh(first) : new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), panelMat);
       body.add(extra);
       const bay = engineBay?.visible;
       if (engineBay) engineBay.visible = true;

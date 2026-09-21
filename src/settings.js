@@ -29,6 +29,8 @@ export const CONFIG_GROUPS = [
     onOff('crt', 'EFEITO CRT', true),
     onOff('mist', 'NÉVOA', true),
     { key: 'trail', label: 'RASTRO', def: 1, values: [0, 0.5, 1, 1.5], format: (v) => t(['DESLIGADO', 'SUAVE', 'NORMAL', 'FORTE'][[0, 0.5, 1, 1.5].indexOf(v)]), hint: () => t('borrão de movimento dos quadros anteriores') },
+    { key: 'motionBlur', label: 'DESFOQUE', def: 1, values: [0, 0.5, 1, 1.5], format: (v) => t(['DESLIGADO', 'SUAVE', 'NORMAL', 'FORTE'][[0, 0.5, 1, 1.5].indexOf(v)]), hint: () => t('desfoque de movimento na velocidade, nas curvas e nas batidas') },
+    { key: 'shake', label: 'TREMOR', def: 1, values: [0, 0.5, 1, 1.5], format: (v) => t(['DESLIGADO', 'SUAVE', 'NORMAL', 'FORTE'][[0, 0.5, 1, 1.5].indexOf(v)]), hint: () => t('câmera treme nas batidas e em alta velocidade') },
     { key: 'fov', label: 'VISÃO', def: 0, values: [-8, -4, 0, 4, 8, 12], format: (v) => `${62 + v}°`, hint: () => t('campo de visão da câmera') },
     onOff('fullscreen', 'TELA CHEIA', false),
   ] },

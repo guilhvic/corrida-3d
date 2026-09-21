@@ -494,7 +494,7 @@
   <div id="session" class="panel">
     <div class="head dot glow"><span id="hud-lap">SAÍDA</span><span id="hud-lap-time">-:--.--</span></div>
     <div id="hud-lap-points"></div>
-    <div class="caption">PONTOS NA VOLTA</div>
+    <div class="caption" id="hud-points-caption" data-i18n-skip>PONTOS NA VOLTA</div>
     <div class="row" id="hud-pos-row" hidden><span>POSIÇÃO</span><b id="hud-pos" class="best">1/1</b></div>
   </div>
 
@@ -592,6 +592,12 @@
       <div class="menu-title"><h2>SINGLEPLAYER</h2><p class="jp">シングルプレイ</p></div>
       <div class="menu-grid">
         <div class="menu-setup">
+          <div class="selector" data-nav data-key="mode">
+            <span class="sel-label">MODO</span>
+            <button type="button" class="sel-arrow" data-dir="-1" aria-label="MODO: anterior">◀</button>
+            <div class="sel-value"><b></b><small></small></div>
+            <button type="button" class="sel-arrow" data-dir="1" aria-label="MODO: próximo">▶</button>
+          </div>
           <div class="selector" data-nav data-key="track">
             <span class="sel-label">PISTA</span>
             <button type="button" class="sel-arrow" data-dir="-1" aria-label="PISTA: anterior">◀</button>
@@ -632,7 +638,7 @@
           <p id="record-line"></p>
           <p id="ghost-line"></p>
           <div class="menu-actions">
-            <button type="button" class="menu-btn primary" data-nav data-action="start">INICIAR CORRIDA</button>
+            <button type="button" class="menu-btn primary" data-nav data-action="start" id="start-btn" data-i18n-skip>INICIAR CORRIDA</button>
             <div class="menu-actions row tight">
               <button type="button" class="menu-btn" data-nav data-action="garage">GARAGEM</button>
               <button type="button" class="menu-btn" data-nav data-action="ranking">RANKING</button>
@@ -641,7 +647,7 @@
           </div>
         </div>
         <div class="menu-preview">
-          <div class="preview-box"><div class="caption">PISTA</div><canvas id="track-preview" width="440" height="250"></canvas><p id="track-info" class="note"></p></div>
+          <div class="preview-box"><div class="caption" id="track-caption" data-i18n-skip>PISTA</div><canvas id="track-preview" width="440" height="250"></canvas><p id="track-info" class="note"></p></div>
           <div class="preview-box"><div class="caption">CARRO</div><canvas id="car-preview" width="440" height="250"></canvas></div>
           <div class="preview-box"><div class="caption">FICHA TÉCNICA</div><div id="car-specs"></div></div>
         </div>

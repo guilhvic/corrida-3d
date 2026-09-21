@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { CAR, ENV, createCar, resetCar, stepCar, shift, paramsOf, setCarParams } from './physics.js';
 import { nearestIndex, lateralOffset, carSurfaces, followGround, groundAt, SURFACES, WALL_OFFSET } from './track.js';
-import { collideWalls, CAR_HALF_LENGTH, CAR_HALF_WIDTH } from './walls.js';
+import { collideWalls, collideRect, CAR_HALF_LENGTH, CAR_HALF_WIDTH } from './walls.js';
 import { DriftScorer, DRIFT } from './drift.js';
 import { buildWorld } from './world.js';
 import { buildFujimiWorld } from './worldFujimi.js';
 import { buildHakoneWorld } from './worldHakone.js';
+import { buildLotWorld } from './lot.js';
 import { createCarModel } from './carModel.js';
 import { DebrisField, shardGeometry } from './debris.js';
 import { CarPreview } from './carPreview.js';
@@ -31,7 +32,7 @@ import { DIFFICULTIES, DIFFICULTY_ORDER, applyDifficulty, loadDifficulty, saveDi
 import { installMist, fogUniforms } from './fog.js';
 import { DebugPanel } from './debug.js';
 import { Menu, savedSettings, RANDOM } from './menu.js';
-import { carById, trackById, timeOf, TRACKS } from './catalog.js';
+import { carById, trackById, timeOf, TRACKS, PRACTICE } from './catalog.js';
 import { Rivals } from './rivals.js';
 import { gridSlot, MAX_RACERS } from './race.js';
 import { t, setLang, getLang, onLangChange } from './i18n.js';
@@ -70,7 +71,7 @@ addEventListener('resize', () => {
 // --- Mundo -----------------------------------------------------------------------------------
 // Cada pista monta o seu cenário uma vez e fica em cache (escondido quando não está em uso).
 // Horário e clima só trocam luz, céu e efeitos (world.setTime): nada é remontado.
-const WORLDS = { city: buildWorld, fujimi: buildFujimiWorld, hakone: buildHakoneWorld };
+const WORLDS = { city: buildWorld, fujimi: buildFujimiWorld, hakone: buildHakoneWorld, lot: buildLotWorld };
 let track = null;
 let world = null;
 let trackId = null;
@@ -205,14 +206,29 @@ function captureEnv(w = world, t = track) {
   w.setEnvMap?.(envTarget.texture);
 }
 
+// Compila os shaders do cenário como eles vão ser desenhados na corrida: com o carro (e o farol dele, que conta
+// como luz) na cena e no alvo linear do pós-processamento. A captura do reflexo esconde o carro, e sem isto a
+// primeira largada em cada pista recompilava o cenário inteiro (um tranco de meio segundo ou mais).
+function compileWorld(w) {
+  const shown = world.root.visible;
+  world.root.visible = w === world;
+  w.root.visible = true;
+  renderer.setRenderTarget(pipeline.sceneTarget);
+  try { renderer.compile(scene, camera); } catch { /* compila na hora, como antes */ }
+  renderer.setRenderTarget(null);
+  if (w !== world) w.root.visible = false;
+  world.root.visible = shown;
+}
+
 // Na tela de carregamento inicial: monta as outras pistas e desenha cada horário uma vez (sobe texturas e
 // compila os shaders). Depois disso trocar de pista ou de clima no menu é instantâneo.
 function prebuildWorlds() {
-  for (const def of TRACKS) {
+  for (const def of [...TRACKS, PRACTICE]) {
     const entry = worldCache.get(def.id) || buildTrackWorld(def, def.times[0].id);
     for (const time of def.times) {
       entry.world.setTime(time.id);
       captureEnv(entry.world, entry.track);
+      compileWorld(entry.world);
     }
   }
   world.setTime(timeId);
@@ -402,7 +418,11 @@ function warmCrashShaders() {
   for (const m of [shardMats.glass, shardMats.red, carModel.shardMaterial]) temp.add(new THREE.Mesh(shardGeometry(0.05), m));
   temp.position.set(car.x, (car.y || 0) - 50, car.z); // fora da vista
   scene.add(temp);
+  // Compila para o alvo em que a cena é desenhada de verdade (linear, do pós-processamento): compilado para a
+  // tela o shader sai numa variante de cor diferente e a batida compila outra vez.
+  renderer.setRenderTarget(pipeline.sceneTarget);
   try { renderer.compile(scene, camera); } catch { /* compila na hora, como antes */ }
+  renderer.setRenderTarget(null);
   temp.removeFromParent();
   temp.traverse((o) => o.geometry?.dispose());
   undo();
@@ -415,6 +435,11 @@ function crash(hit, speed, who = 0) {
   ev.zones = { ...zones }; // zonas de amassado/risco depois desta batida (o replay as recoloca)
   applyCrash(ev, c, true, model);
   crashLog.push(ev);
+  // Batida do jogador: sacode a câmera e borra a imagem num estalo
+  if (!who) {
+    addTrauma(Math.min(0.6, 0.15 + speed * 0.035));
+    blurKick = Math.min(0.05, blurKick + speed * 0.003);
+  }
 }
 
 // Batidas dos rivais do quadro: amassam, soltam peças e entram no replay (uma forte por vez, como o jogador).
@@ -574,7 +599,19 @@ function placeOnTrack(i) {
 // --- Câmera ------------------------------------------------------------------------------------
 let camMode = 0;
 let camYaw = car.yaw;
-let shake = 0;
+// Tremor: "trauma" de 0 a 1 somado nas batidas. A amplitude segue o quadrado (raspão quase não treme, pancada
+// sacode) e anda por ruído suave, não por sorteio a cada quadro; em alta velocidade entra um zumbido fino.
+let trauma = 0;
+let shakeClock = 0;
+const shakeOffset = new THREE.Vector3(); // deslocamento do quadro anterior (tirado antes de seguir o carro)
+const addTrauma = (v) => { trauma = Math.min(1, trauma + v); };
+const wobble = (t, seed) => Math.sin(t + seed) * 0.5 + Math.sin(t * 2.31 + seed * 1.7) * 0.3 + Math.sin(t * 4.13 + seed * 2.9) * 0.2;
+// Desfoque de movimento: pancada extra na batida e a direção em que a câmera olhava no quadro anterior.
+let blurKick = 0;
+const prevLook = new THREE.Vector3();
+const prevCamPos = new THREE.Vector3();
+const blurShift = new THREE.Vector2();
+let blurReady = false;
 const camTarget = new THREE.Vector3();
 const tmp = new THREE.Vector3();
 const lerpAngle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
@@ -613,6 +650,8 @@ function updateOrbit(dt) {
 
 function updateCamera(dt, rumble) {
   if (window.game?.freeCamera) return; // depuração: câmera posicionada pelo console
+  camera.position.sub(shakeOffset); // o tremor do quadro anterior não entra na suavização da câmera
+  shakeOffset.set(0, 0, 0);
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
   const cy = car.y || 0, slope = Math.tan(car.pitch || 0);
   if (camMode === 3 && carModel && !garageView) {
@@ -652,16 +691,63 @@ function updateCamera(dt, rumble) {
     camera.lookAt(camTarget);
     camera.fov = 62 + config.fov + Math.min(14, car.speed * 0.22);
   }
-  const jitter = (rumble ? Math.min(0.05, car.speed * 0.002) : 0) + shake;
-  if (jitter > 0) {
-    camera.position.x += (Math.random() - 0.5) * jitter;
-    camera.position.y += (Math.random() - 0.5) * jitter;
-  }
-  shake = Math.max(0, shake - dt * 1.5);
+  applyShake(dt, rumble);
   // Na garagem a imagem anda para a esquerda: o carro aparece à direita do cartão de opções.
   if (garageView && innerWidth > 720) camera.setViewOffset(innerWidth, innerHeight, -innerWidth * 0.2, 0, innerWidth, innerHeight);
   else if (camera.view?.enabled) camera.clearViewOffset();
   camera.updateProjectionMatrix();
+}
+
+// Tremor na câmera já posicionada: batida (trauma²), zumbido de alta velocidade e trepidação da calçada.
+// No cockpit o corpo balança menos que a câmera de fora (o piloto está preso ao banco).
+function applyShake(dt, rumble) {
+  const amount = paused ? 0 : config.shake ?? 1;
+  if (!paused) { shakeClock += dt; trauma = Math.max(0, trauma - dt * 1.1); }
+  if (!amount) return;
+  const hit = trauma * trauma * amount * (camMode === 3 ? 0.6 : 1);
+  const buzz = amount * (Math.max(0, Math.min(1, (car.speed - 26) / 34)) * 0.35 + (rumble ? Math.min(0.5, car.speed * 0.02) : 0));
+  const tq = shakeClock * 22, tb = shakeClock * 41;
+  const ox = wobble(tq, 1) * 0.22 * hit + wobble(tb, 7) * 0.008 * buzz;
+  const oy = wobble(tq, 2) * 0.16 * hit + wobble(tb, 8) * 0.012 * buzz;
+  if (ox || oy) {
+    const before = tmp.copy(camera.position);
+    camera.translateX(ox);
+    camera.translateY(oy);
+    shakeOffset.subVectors(camera.position, before);
+  }
+  camera.rotateX(wobble(tq, 3) * 0.03 * hit + wobble(tb, 9) * 0.0025 * buzz);
+  camera.rotateY(wobble(tq, 4) * 0.03 * hit);
+  camera.rotateZ(wobble(tq, 5) * 0.055 * hit + wobble(tb, 10) * 0.002 * buzz);
+}
+
+// Desfoque de movimento do quadro: radial com a velocidade do carro (mais forte nas câmeras de dentro, que andam
+// junto) e na direção em que a imagem andou na tela desde o quadro anterior (curva, drift, tremor da batida).
+function motionBlur(dt, live) {
+  const amount = config.motionBlur ?? 1;
+  const look = tmp.set(0, 0, -100).applyQuaternion(camera.quaternion);
+  let radial = 0;
+  blurShift.set(0, 0);
+  if (live && amount > 0 && blurReady && dt > 0) {
+    const inside = camMode >= 2 ? 1.25 : 1;
+    radial = amount * (Math.max(0, Math.min(1, (car.speed - 18) / 42)) ** 1.5 * 0.055 * inside + blurKick);
+    // Onde o centro do quadro anterior foi parar na tela agora = quanto a imagem girou neste quadro.
+    if (camera.position.distanceToSquared(prevCamPos) < 25) {
+      camera.updateMatrixWorld(); // a matriz de vista só é refeita no render: sem isto projetaria com a do quadro anterior
+      const p = prevLook.clone().add(camera.position).project(camera);
+      if (p.z < 1) {
+        const shutter = Math.min(4, (1 / 60) / dt); // exposição de 1/60 s: o mesmo borrão em 30, 60 ou 144 quadros/s
+        blurShift.set(p.x * 0.5, p.y * 0.5).multiplyScalar(shutter * amount * 0.8);
+        const l = blurShift.length();
+        if (l > 0.045) blurShift.multiplyScalar(0.045 / l);
+        if (l < 0.0015) blurShift.set(0, 0);
+      }
+    }
+  }
+  prevLook.copy(look);
+  prevCamPos.copy(camera.position);
+  blurReady = true;
+  blurKick = Math.max(0, blurKick - dt * 0.12);
+  return radial;
 }
 
 // --- Corrida e menus ---------------------------------------------------------------------------
@@ -692,6 +778,17 @@ function switchTrack(id, time) {
 }
 
 function placeOnGrid() {
+  if (track.lot) {
+    rivals.setup(0, difficulty);
+    const { spawn } = track.lot;
+    resetCar(car, spawn.x, spawn.z, spawn.yaw);
+    idx = nearestIndex(track, car.x, car.z);
+    followGround(car, track, idx);
+    world.cones?.reset();
+    skids.last.clear();
+    driftTrail.clear();
+    return;
+  }
   const rivalCount = race.racers - 1;
   rivals.setup(rivalCount, difficulty);
   // Sozinho: no centro da rua, na última posição do grid.
@@ -739,6 +836,8 @@ function resetRaceState() {
 }
 
 function startRace(settings) {
+  // Treino: ao sair, o fundo do menu volta para a pista em que se estava.
+  if (settings.track === PRACTICE.id && trackId !== PRACTICE.id) race.returnTo = { track: trackId, time: timeId };
   if (settings.track && needsBuild(settings.track)) {
     const def = trackById(settings.track);
     withLoading(def, timeOf(def, settings.time), () => { switchTrack(settings.track, settings.time); beginRace(settings); });
@@ -753,19 +852,58 @@ function beginRace(settings) {
   if (settings.car) setPlayerCar(settings.car);
   race.laps = settings.laps;
   race.racers = settings.racers ?? race.racers;
+  if (profile.race) { saveCarDamage(); profile.abandon(); } // batida de corrida abandonada também fica na lataria
+  if (track.lot) {
+    // Treino: a lataria de antes fica guardada e volta ao reiniciar (R) e ao sair. Nada conta para o perfil.
+    if (race.practiceBase) restorePracticeCar(); else race.practiceBase = carState();
+    race.laps = 0;
+    race.racers = 1;
+  }
   resetRaceState();
   car.automatic = config.gearbox === 'auto';
   if (car.automatic && car.gear === 0) car.gear = 1;
-  if (profile.race) { saveCarDamage(); profile.abandon(); } // batida de corrida abandonada também fica na lataria
-  profile.startRace({ track: trackId, time: timeId, car: playerCarId, laps: race.laps, racers: race.racers, difficulty });
+  if (!track.lot) profile.startRace({ track: trackId, time: timeId, car: playerCarId, laps: race.laps, racers: race.racers, difficulty });
   raceAchievements.length = 0;
   menu.hide();
+  if (track.lot) {
+    // Sem contagem nem sobrevoo: já sai andando.
+    race.phase = 'running';
+    hud.countdown('');
+    hud.toast(t('Treino livre · R volta para a saída e arruma os cones'), 'info', 3200);
+    paused = false;
+    audio.start();
+    audio.suspend(false);
+    return;
+  }
   // Sobrevoo de TV antes da contagem (não no reinício)
   if (config.intro && !settings.restart) startIntro();
   else startCountdown();
   paused = false;
   audio.start();
   audio.suspend(false);
+}
+
+// Treino: devolve a lataria guardada ao entrar. Só remonta o modelo se alguma peça tiver caído (é o que custa).
+function restorePracticeCar() {
+  const base = race.practiceBase;
+  if (!base) return;
+  if (carModel.brokenParts().length !== (base.broken || []).length) setPlayerCar(playerCarId, true, base);
+  else {
+    for (const k of Object.keys(damage)) damage[k] = base[k] || 0;
+    carModel.setHits(base.hits || []);
+  }
+  debris.clear();
+}
+
+function resetPractice() {
+  restorePracticeCar();
+  scorer.resetCombo();
+  placeOnGrid();
+  skids.clear();
+  crashCooldown = 0;
+  camYaw = car.yaw;
+  orbit.yaw = 0; orbit.pitch = 0; orbit.idle = 99;
+  hud.toast(t('De volta à saída'), 'info', 1200);
 }
 
 // --- Sobrevoo antes da largada --------------------------------------------------------------------------------
@@ -799,6 +937,7 @@ function pauseGame() {
   paused = true;
   const standings = rivals.standings(playerRow());
   menu.showPause({
+    practice: track.lot ? { cones: world.cones?.knocked ?? 0 } : null,
     lap: timer.lap, laps: race.laps, total: scorer.total + scorer.comboValue, time: race.time,
     position: standings.findIndex((r) => r.player) + 1, racers: standings.length,
   });
@@ -817,6 +956,14 @@ function quitToMenu() {
   if (race.phase === 'intro') startCountdown();
   announcer.stop();
   race.phase = 'menu';
+  if (track.lot) {
+    // Sai do treino: carro como estava antes de entrar e o menu de volta na pista de antes.
+    if (race.practiceBase) restorePracticeCar();
+    race.practiceBase = null;
+    const back = race.returnTo ?? { track: TRACKS[0].id };
+    race.racers = menu.settings.racers;
+    switchTrack(back.track, back.time);
+  }
   resetRaceState();
   paused = true;
   menu.show('main');
@@ -1097,6 +1244,7 @@ function handleActions() {
     car.driftAssist = !car.driftAssist;
     hud.toast(t(car.driftAssist ? 'Assistência de drift ligada' : 'Assistência de drift desligada'), car.driftAssist ? 'info' : 'bad', 1600);
   }
+  if (a.reset && race.phase === 'running' && track.lot) { resetPractice(); return; }
   if (a.reset && race.phase === 'running') {
     scorer.resetCombo();
     placeOnTrack(nearestIndex(track, car.x, car.z, idx));
@@ -1105,6 +1253,13 @@ function handleActions() {
 
 // Distância da lateral do carro mais próxima até uma parede (usa os 4 cantos).
 function wallDistance() {
+  if (track.lot) {
+    // Estacionamento: mureta mais próxima ou cone de pé mais próximo (passar rente a um cone também vale).
+    const { rect } = track.lot;
+    const reach = Math.max(CAR_HALF_LENGTH, CAR_HALF_WIDTH);
+    const walls = Math.min(car.x - rect.minX, rect.maxX - car.x, car.z - rect.minZ, rect.maxZ - car.z) - reach;
+    return Math.min(walls, world.cones ? world.cones.nearest(car) : Infinity);
+  }
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw), lx = fz, lz = -fx;
   let best = Infinity;
   for (const [ox, oz] of [[CAR_HALF_WIDTH, CAR_HALF_LENGTH], [-CAR_HALF_WIDTH, CAR_HALF_LENGTH], [CAR_HALF_WIDTH, -CAR_HALF_LENGTH], [-CAR_HALF_WIDTH, -CAR_HALF_LENGTH]]) {
@@ -1122,14 +1277,21 @@ function simulate(dt, demoMode = false) {
   let steps = 0;
   let impact = null;
   let carHit = null;
+  let coneHit = null;
   let sf = SURFACES.asphalt, sr = SURFACES.asphalt;
+  const lot = track.lot;
   while (acc >= STEP && steps < 48) {
-    [sf, sr] = carSurfaces(track, car, idx, paramsOf(car).a, paramsOf(car).b);
+    // No estacionamento é tudo asfalto até a mureta; as muretas são as bordas retas do pátio.
+    if (!lot) [sf, sr] = carSurfaces(track, car, idx, paramsOf(car).a, paramsOf(car).b);
     stepCar(car, inp, STEP, sf, sr);
     idx = nearestIndex(track, car.x, car.z, idx);
     followGround(car, track, idx);
-    const hit = collideWalls(car, track, idx);
+    const hit = lot ? collideRect(car, lot.rect) : collideWalls(car, track, idx);
     if (hit && (!impact || hit.speed > impact.speed)) impact = hit;
+    if (lot && world.cones) {
+      const ch = world.cones.collide(car);
+      if (ch && (!coneHit || ch.speed > coneHit.speed)) coneHit = ch;
+    }
     for (const c of rivals.step(STEP, car)) {
       if (c.a === 0 && (!carHit || c.speed > carHit.speed)) carHit = c; // o jogador é sempre o índice 0
       else if (c.speed > 2) audio.impact(Math.min(4, c.speed * 0.6), c); // batida entre rivais, no lugar dela
@@ -1143,18 +1305,24 @@ function simulate(dt, demoMode = false) {
   debugInfo.surfaces = [sf, sr];
   const simDt = steps * STEP;
 
+  // Cone derrubado: pancada oca de plástico, no lugar do cone
+  if (coneHit && coneHit.speed > 0.6) {
+    audio.impact(Math.min(2.5, 0.4 + coneHit.speed * 0.12), coneHit);
+    if (coneHit.speed > 3) addTrauma(0.05);
+  }
+
   // Pontuação (só com a corrida valendo)
   if (race.phase === 'running') {
     race.time += simDt;
-    if (impact && impact.speed > DRIFT.wallImpact && !race.wallContact) profile.wallHit();
+    if (impact && impact.speed > DRIFT.wallImpact && !race.wallContact && !lot) profile.wallHit();
     race.wallContact = !!impact;
     const onGrass = sf === SURFACES.offroad && sr === SURFACES.offroad;
     scorer.update(simDt, {
       angle: car.driftAngle, speed: car.speed, onGrass,
       wallImpact: impact ? impact.speed : 0, carImpact: carHit ? carHit.speed : 0, wallDistance: wallDistance(),
     });
-    // Na última volta o combo em andamento é somado ao cruzar a linha.
-    timer.update(simDt, car, idx, () => {
+    // Na última volta o combo em andamento é somado ao cruzar a linha. (No treino não há volta.)
+    if (!lot) timer.update(simDt, car, idx, () => {
       if (race.laps && timer.lap === race.laps) scorer.bank();
       return scorer.startLap();
     });
@@ -1210,7 +1378,7 @@ function simulate(dt, demoMode = false) {
   if (carHit && carHit.speed > 0.8) {
     particles.sparks(carHit.x, carHit.z, carHit.nx, carHit.nz, carHit.speed, groundY, car.vx * 0.5, car.vz * 0.5);
     audio.impact(carHit.speed);
-    if (carHit.speed > 1.5 && !demoMode) { shake = Math.min(0.4, shake + carHit.speed * 0.03); input.hit(Math.min(1, 0.25 + carHit.speed * 0.08), 200); }
+    if (carHit.speed > 1.5 && !demoMode) { addTrauma(Math.min(0.5, carHit.speed * 0.045)); input.hit(Math.min(1, 0.25 + carHit.speed * 0.08), 200); }
   }
 
   // Batida / raspão na parede
@@ -1231,7 +1399,7 @@ function simulate(dt, demoMode = false) {
     particles.grind(impact.x, impact.z, impact.nx, impact.nz, car.vx, car.vz, simDt, groundY);
     sparkLight.position.set(impact.x + impact.nx * 0.6, groundY + 0.5, impact.z + impact.nz * 0.6);
     if (strength > 1.5 && !demoMode) {
-      shake = Math.min(0.4, shake + strength * 0.03);
+      addTrauma(Math.min(0.55, strength * 0.05));
       input.hit(Math.min(1, 0.25 + strength * 0.08), 200);
     }
   }
@@ -1262,8 +1430,8 @@ function simulate(dt, demoMode = false) {
     if (achievementTimer > 1) { achievementTimer = 0; announceAchievements(); }
   }
 
-  // Nota de estilo por curva
-  if (race.phase === 'running' && simDt > 0) {
+  // Nota de estilo por curva (curvas da pista: no estacionamento não há)
+  if (race.phase === 'running' && simDt > 0 && !lot) {
     judge.update(simDt, {
       idx, lateral: lateralOffset(track, idx, car.x, car.z), angle: Math.abs(car.driftAngle) * 57.2958, speed: car.speed,
       smoke: rearSkid * Math.min(1, car.speed / 25), drifting: scorer.active && scorer.idle === 0,
@@ -1279,7 +1447,7 @@ function simulate(dt, demoMode = false) {
   }
 
   // Grava o replay (jogador primeiro, depois os rivais na ordem da lista)
-  if (simDt > 0 && !demoMode) {
+  if (simDt > 0 && !demoMode && !lot) {
     recorder.record(simDt, [
       { car, skid: rearSkid, mult: scorer.active ? scorer.mult : 0 },
       ...rivals.list.map((e) => ({ car: e.car, skid: skidOf(e.car), mult: 0 })),
@@ -1339,6 +1507,7 @@ function frame(now) {
   carModel.setDamage(replay.playing && replay.zones ? replay.zones : damage);
   rivals.list.forEach((e, i) => e.model.setDamage(replay.playing ? (replay.rivalZones?.[i + 1] ?? NO_DAMAGE) : e.zones));
   debris.update(paused && !replay.playing ? 0 : dt);
+  world.cones?.update(paused ? 0 : dt);
   // A vitrine do menu só gira enquanto a tela do singleplayer está à vista.
   if (menu.visible && menu.current === 'single') carPreview.update(dt);
   if (menu.visible && menu.current === 'bodyshop') shopPreview.update(dt);
@@ -1383,7 +1552,7 @@ function frame(now) {
   fogUniforms.uFogTime.value = now / 1000;
   debugInfo.fps = fps;
   debug.update(dt, debugInfo);
-  hud.update(car, timer, scorer, { fps, ghost: pose, padName, totalLaps: race.laps, rivals: rivals.list });
+  hud.update(car, timer, scorer, { fps, ghost: pose, padName, totalLaps: race.laps, rivals: rivals.list, cones: world.cones });
   race.standingsTimer -= dt;
   if (race.standingsTimer <= 0) {
     race.standingsTimer = 0.25;
@@ -1394,7 +1563,10 @@ function frame(now) {
   audio.setMusicIntensity(freeCam.active ? 0.55 : menu.current === 'results' ? 0.7 : race.phase === 'intro' ? 0.8 : race.phase === 'menu' ? 0.5 : paused ? 0.3 : 1);
   if (race.phase !== 'running') audio.setMusicCombo(0);
   const trail = cut ? 0 : paused && !demo.active ? 0.05 : 0.06 + Math.min(0.16, car.speed * 0.004);
-  pipeline.render(scene, camera, { trail: trail * config.trail });
+  // Desfoque só com o carro na mão do jogador (nem menu, nem pausa, nem replay ou câmera livre)
+  const live = !cut && !paused && !freeCam.active && !replay.playing && (race.phase === 'running' || race.phase === 'finished');
+  const radial = motionBlur(dt, live);
+  pipeline.render(scene, camera, { trail: trail * config.trail, radial, shift: live ? blurShift : null });
   requestAnimationFrame(frame);
 }
 
@@ -1417,7 +1589,7 @@ async function loadCustomCar() {
 loadCustomCar();
 
 // Acesso pelo console para depuração e ajuste de acerto (ex.: game.CAR.counterSteer = 0.7).
-window.game = { frame: (now) => frame(now), get carModel() { return carModel; }, debris, car, damage, profile, announcer, demo, get intro() { return intro; }, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
+window.game = { frame: (now) => frame(now), get carModel() { return carModel; }, debris, car, damage, profile, announcer, demo, get intro() { return intro; }, particles, skids, recorder, replay, director, showResults, timer, scorer, judge, hud, driftTrail, freeCam, toggleFreeCam, get track() { return track; }, get world() { return world; }, switchTrack, CAR, scene, camera, pipeline, debug, race, menu, startRace, rivals, audio };
 
 // Posiciona a câmera antes do primeiro frame para não "voar" até o carro.
 camera.position.set(car.x - Math.sin(car.yaw) * 6.6, 2.4, car.z - Math.cos(car.yaw) * 6.6);
