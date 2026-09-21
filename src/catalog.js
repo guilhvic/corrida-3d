@@ -68,6 +68,18 @@ export const CARS = [
     params: { a: 1.25, b: 1.28, mass: 1240, inertia: 1600, torqueScale: 1.1, redline: 8000, upshiftRpm: 7500, finalDrive: 4.25, rearGrip: 0.97 },
   },
   {
+    id: 'kaminari86',
+    design: 'kaminari86',
+    name: 'KAMINARI 86',
+    jp: '雷86',
+    description: 'Hatch leve de 1983 com faróis escamoteáveis e pintura de dois tons. Motor 1.6 aspirado de alto giro: pouca força, mas gira rápido e entra de lado com pouco.',
+    engine: 'i4na',
+    params: {
+      a: 1.2, b: 1.2, mass: 950, inertia: 1080, cgHeight: 0.44, torqueScale: 0.5, redline: 7800, upshiftRpm: 7400,
+      finalDrive: 4.3, rearGrip: 0.95, dragK: 0.38, easyMaxTorque: 23000, stabilityK: 46000,
+    },
+  },
+  {
     id: 'tsubame',
     design: 'tsubame',
     name: 'TSUBAME NA ROADSTER',

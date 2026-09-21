@@ -9,6 +9,7 @@ const { sides } = P;
 export const seiran = {
   color: 0xdfe3e8,
   finish: 'pearl',
+  engineColor: 0x1c1c1f, // tampa de válvulas (aparece se o capô arrancar)
   axles: { a: 1.25, b: 1.28 },
   plate: ['品川 330', 'み', '15-15'],
   wheels: { style: 'five', color: 0xb9bdc4, x: 0.745, width: 0.215, rimRadius: 0.205, caliper: 0xd4a017, lip: 'painted' },

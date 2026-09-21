@@ -235,6 +235,98 @@ export function countryRoadTextures(seed = 47) {
 }
 
 // Blocos intertravados de concreto (2 m x 2 m).
+// Chão de mato: 8 x 8 m de capim com tufos, terra pelada, pedrinhas e folhas secas. Vem com relevo e
+// brilho, então a luz rasante do fim de tarde pega as touceiras. A cor fica quase neutra de propósito:
+// o mapa tinge o terreno por vértice (campo, mata, rocha) por cima dela.
+export function groundTextures(seed = 71, { leaves = 0 } = {}) {
+  const rand = mulberry32(seed);
+  const W = 256, H = 256;
+  const s = new Surface(W, H);
+  const patch = valueNoise(rand, 6, 6), clump = valueNoise(rand, 22, 22), fine = valueNoise(rand, 90, 90);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = s.i(x, y), u = x / W, v = y / H, grain = rand();
+      const bare = clamp01((patch(u, v) - 0.56) * 4); // clareiras de terra
+      let g = 0.5 + (clump(u, v) - 0.5) * 0.3 + (fine(u, v) - 0.5) * 0.22 + (grain - 0.5) * 0.12;
+      g = g * (1 - bare) + (0.62 + (grain - 0.5) * 0.14) * bare;
+      s.setGray(i, g, bare > 0.5 ? [1.1, 0.95, 0.8] : [0.92, 1.05, 0.82]);
+      s.height[i] = clump(u, v) * 0.5 + fine(u, v) * 0.3 + grain * 0.2;
+      s.spec[i] = 0.05 + (1 - bare) * 0.07;
+    }
+  }
+  // Touceiras: riscos curtos apontando para cima, mais claros na ponta
+  for (let k = 0; k < 900; k++) {
+    const x0 = rand() * W, y0 = rand() * H, len = 3 + rand() * 7, lean = (rand() - 0.5) * 3;
+    const tone = 0.75 + rand() * 0.5;
+    for (let t = 0; t < len; t++) {
+      const i = s.i(Math.round(x0 + (lean * t) / len), Math.round(y0 - t));
+      const tip = t / len;
+      s.setGray(i, 0.34 * tone + tip * 0.3, [0.9, 1.08, 0.78]);
+      s.height[i] = 0.55 + tip * 0.45;
+    }
+  }
+  // Pedrinhas e gravetos
+  for (let k = 0; k < 90; k++) {
+    const cx = rand() * W, cy = rand() * H, r = 1 + rand() * 2.4, tone = 0.6 + rand() * 0.35;
+    s.ellipse(cx, cy, r, r * (0.6 + rand() * 0.5), (i, px, py, t) => {
+      s.setGray(i, tone * (1.1 - t * 0.35), [1, 0.99, 0.95]);
+      s.height[i] = 0.75 + (1 - t) * 0.25;
+      s.spec[i] = 0.18;
+    });
+  }
+  // Folhas secas (outono de Hakone): manchinhas quentes espalhadas
+  for (let k = 0; k < leaves * 260; k++) {
+    const cx = rand() * W, cy = rand() * H, r = 1.6 + rand() * 2.2;
+    const tint = rand() < 0.5 ? [1.5, 0.75, 0.4] : [1.35, 1.05, 0.45];
+    s.ellipse(cx, cy, r, r * 0.6, (i, px, py, t) => {
+      if (t > 0.9) return;
+      s.setGray(i, 0.5 + rand() * 0.1, tint);
+      s.height[i] = 0.7;
+    });
+  }
+  return s.textures({ normalStrength: 1.6 });
+}
+
+// Acostamento: 4 m de faixa entre o asfalto e o guard-rail. v = 0 na beira da pista (cascalho e poeira)
+// e v = 1 no mato alto junto do guard-rail, com pedras, terra batida e touceiras no meio.
+export function vergeTextures(seed = 83) {
+  const rand = mulberry32(seed);
+  const W = 128, H = 128;
+  const s = new Surface(W, H);
+  const clump = valueNoise(rand, 18, 18), fine = valueNoise(rand, 64, 64), patch = valueNoise(rand, 5, 5);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = s.i(x, y), u = x / W, v = y / H, grain = rand();
+      const grass = clamp01((v - 0.25) * 1.8 + (patch(u, v) - 0.5) * 0.8); // mato ganha da terra subindo
+      const dirt = 0.56 + (patch(u, v) - 0.5) * 0.18 + (grain - 0.5) * 0.16;
+      const green = 0.42 + (clump(u, v) - 0.5) * 0.3 + (fine(u, v) - 0.5) * 0.18;
+      const g = dirt * (1 - grass) + green * grass;
+      s.setGray(i, g, [1.12 - grass * 0.24, 1.02 + grass * 0.04, 0.82 - grass * 0.06]);
+      s.height[i] = grain * 0.35 + clump(u, v) * 0.4 * grass + (1 - grass) * 0.2;
+      s.spec[i] = 0.1 - grass * 0.05;
+    }
+  }
+  for (let k = 0; k < 420; k++) {
+    const y0 = H * (0.3 + rand() ** 0.6 * 0.72), x0 = rand() * W;
+    const len = 3 + rand() * 8 * (y0 / H), lean = (rand() - 0.5) * 3;
+    const tone = 0.7 + rand() * 0.5;
+    for (let t = 0; t < len; t++) {
+      const i = s.i(Math.round(x0 + (lean * t) / len), Math.round(y0 - t));
+      s.setGray(i, 0.3 * tone + (t / len) * 0.28, [0.88, 1.1, 0.74]);
+      s.height[i] = 0.6 + (t / len) * 0.4;
+    }
+  }
+  for (let k = 0; k < 70; k++) {
+    const cx = rand() * W, cy = rand() * H * 0.6, r = 0.8 + rand() * 1.8, tone = 0.7 + rand() * 0.3;
+    s.ellipse(cx, cy, r, r * 0.8, (i, px, py, t) => {
+      s.setGray(i, tone * (1.15 - t * 0.4), [1.02, 1, 0.96]);
+      s.height[i] = 0.8;
+      s.spec[i] = 0.2;
+    });
+  }
+  return s.textures({ normalStrength: 1.5 });
+}
+
 export function paverTextures(seed = 57) {
   const rand = mulberry32(seed);
   const W = 128, H = 128, bw = 16, bh = 8;

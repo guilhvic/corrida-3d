@@ -7,6 +7,17 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 
 export const sides = [-1, 1];
 
+// Peça que pode se soltar numa batida (retrovisor, tampa de farol, placa...). Fica num grupo próprio
+// para escapar da junção de malhas, e o carro a solta depois (src/carModel.js + src/debris.js).
+export function breakable(ctx, name, object, { radius = 0.12, hp = 2.4 } = {}) {
+  if (!ctx.breakables || !object) return object;
+  const holder = new THREE.Group();
+  (object.parent || ctx.parent).add(holder);
+  holder.add(object);
+  ctx.breakables.push({ name, holder, radius, hp });
+  return object;
+}
+
 export function addMesh(parent, geometry, material, { pos, rot, scale, order } = {}) {
   const m = new THREE.Mesh(geometry, material);
   if (pos) m.position.set(...pos);
@@ -161,8 +172,10 @@ export function bodyNormal(body, z, g, side = 1) {
 
 // Retrovisor aerodinâmico anos 90: base triangular na porta, haste e concha oval com espelho.
 export function sideMirror(ctx, { z, y, out = 0.12, size = 1 }) {
-  const { body, parent, mats } = ctx;
+  const { body, mats } = ctx;
   for (const s of sides) {
+    const parent = new THREE.Group(); // carcaça, vela e haste soltam juntas
+    ctx.parent.add(parent);
     const g = body.gAtY(z, y, 3, 5);
     const base = body.surface(z, g, s, 0.004);
     const housing = new THREE.Group();
@@ -188,6 +201,7 @@ export function sideMirror(ctx, { z, y, out = 0.12, size = 1 }) {
     const sailM = addMesh(parent, sailG, mats.trim, { pos: [base[0] + s * 0.008, base[1] - 0.02, z + 0.08] });
     sailM.rotation.set(0, s > 0 ? Math.PI / 2 : -Math.PI / 2, 0);
     tube(parent, [[base[0] + s * 0.01, base[1], z - 0.02], [base[0] + s * out * 0.55, base[1] + 0.02 * size, z - 0.03], [base[0] + s * (out - 0.04), base[1] + 0.03 * size, z - 0.03]], 0.012 * size, mats.trim, { radial: 6 });
+    breakable(ctx, s > 0 ? 'retrovisor-esq' : 'retrovisor-dir', parent, { hp: 1.6 });
   }
 }
 
@@ -246,6 +260,7 @@ export function licensePlate(ctx, { x = 0, y, z, back = false, tilt = 0, frame =
   }
   for (const bx of [-0.12, 0.12]) addMesh(g, new THREE.CylinderGeometry(0.008, 0.008, 0.006, 8), mats.chrome, { pos: [bx, 0.055, 0.008], rot: [Math.PI / 2, 0, 0] });
   detail.add(g);
+  breakable(ctx, back ? 'placa-tras' : 'placa-frente', g, { hp: 2.6 });
   return g;
 }
 
@@ -455,7 +470,10 @@ export function shade(hex, amount) {
 // spec: side, xIn/xOut (borda de dentro/de fora), zHinge/zFront, zFrontOut (frente na ponta de fora,
 // para tampas que seguem a quina), angle (rad), lamp: 'round' | 'twin' | 'rect'
 export function popupHeadlight(ctx, { side, xIn, xOut, zHinge, zFront, zFrontOut = zFront, angle = 0.55, lamp = 'round', thick = 0.014 }) {
-  const { probe, parent, detail, mats } = ctx;
+  const { probe, mats } = ctx;
+  const unit = new THREE.Group(); // o conjunto inteiro sai numa batida forte
+  ctx.parent.add(unit);
+  const parent = unit, detail = unit;
   const NU = 10, NT = 8;
   const s = side;
   const shapeFn = (u, t) => {
@@ -474,7 +492,7 @@ export function popupHeadlight(ctx, { side, xIn, xOut, zHinge, zFront, zFrontOut
   };
 
   // Vão no capô (fica visível na frente da lâmpada)
-  addMesh(parent, probe.patch({ axis: 'y', dir: 1, nu: NU, nv: NT, lift: 0.0015, shapeFn }), mats.cavity);
+  addMesh(ctx.parent, probe.patch({ axis: 'y', dir: 1, nu: NU, nv: NT, lift: 0.0015, shapeFn }), mats.cavity);
 
   // Tampa com espessura, girada
   const lid = probe.shell({ axis: 'y', dir: 1, nu: NU, nv: NT, lift: -thick, shapeFn }, thick + 0.001);
@@ -549,5 +567,6 @@ export function popupHeadlight(ctx, { side, xIn, xOut, zHinge, zFront, zFrontOut
     addMesh(detail, new THREE.TorusGeometry(r * 1.1, 0.01, 6, 28), mats.chrome, { pos: [center[0], cy, cz + 0.002] });
     reflectorLamp(detail, mats, { r, depth: 0.05, pos: [center[0], cy, cz] });
   }
+  breakable(ctx, s > 0 ? 'farol-esq' : 'farol-dir', unit, { hp: 2.2 });
   return [center[0], cy, cz + 0.02];
 }

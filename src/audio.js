@@ -3,6 +3,7 @@
 // na pausa e nos menus os efeitos calam e a música segue, abafada.
 // Rivais: uma voz posicional por carro (motor + pneus) com o ouvinte na câmera.
 import { EngineDSP } from './engine-dsp.js';
+import { Ambience } from './ambience.js';
 
 export class CarAudio {
   constructor() {
@@ -15,7 +16,7 @@ export class CarAudio {
     this.musicOn = true;
     try { this.musicOn = localStorage.getItem('corrida3d.musica') !== '0'; } catch { /* sem storage */ }
     this.musicIntensity = 0.45;
-    this.volumes = { master: 0.8, music: 0.6, engine: 0.8, rivals: 0.7, effects: 0.8 };
+    this.volumes = { master: 0.8, music: 0.6, engine: 0.8, rivals: 0.7, effects: 0.8, ambience: 0.7 };
     this.onSong = null;
     this.song = null;
   }
@@ -68,6 +69,7 @@ export class CarAudio {
     this.engineGain.gain.setTargetAtTime(0.55 * V.engine, t, 0.05);
     this.rivalBus.gain.setTargetAtTime(V.rivals, t, 0.05);
     this.fx.gain.setTargetAtTime(V.effects, t, 0.05);
+    this.ambienceBus?.gain.setTargetAtTime(V.ambience ?? 0.7, t, 0.2);
   }
 
   nextSong() {
@@ -153,6 +155,28 @@ export class CarAudio {
     this.rainLow = makeNoise('lowpass', 300, 0.6);
     this.setRain(this.raining);
     this.rumbleGain = makeNoise('lowpass', 120, 1);
+
+    // Ambiente da pista (cigarras, vento, guindaste...) num barramento próprio: cala junto com os efeitos.
+    this.ambienceBus = ctx.createGain();
+    this.ambienceBus.connect(this.sfx);
+    this.ambience = new Ambience(ctx, this.ambienceBus, noise);
+    if (this.scene) this.ambience.setScene(this.scene[0], this.scene[1]);
+
+    // Eco do escapamento: parte do motor volta atrasada (muro de pedra dos grampos de Hakone).
+    this.echoSend = ctx.createGain();
+    this.echoSend.gain.value = 0;
+    const delay = ctx.createDelay(0.5);
+    delay.delayTime.value = 0.13;
+    const feedback = ctx.createGain();
+    feedback.gain.value = 0.38;
+    const echoTone = ctx.createBiquadFilter();
+    echoTone.type = 'lowpass';
+    echoTone.frequency.value = 1900;
+    this.engineGain.connect(this.echoSend);
+    this.echoSend.connect(delay);
+    delay.connect(echoTone).connect(this.sfx);
+    echoTone.connect(feedback).connect(delay);
+
     this.applyVolumes();
   }
 
@@ -178,11 +202,76 @@ export class CarAudio {
     this.applyVolumes();
   }
 
+  // Ambiente da pista: trocado quando muda de pista ou de horário.
+  setAmbience(trackId, timeId) {
+    this.scene = [trackId, timeId];
+    this.ambience?.setScene(trackId, timeId);
+  }
+
+  // info: { train } (0..1: o trem de Fujimi passando toca o sino da passagem de nível)
+  updateAmbience(dt, info) {
+    this.ambience?.update(dt, info);
+  }
+
+  // Quanto do motor volta em eco (0 em campo aberto, 1 entre os muros de pedra).
+  setEcho(amount) {
+    if (!this.echoSend) return;
+    this.echoSend.gain.setTargetAtTime(amount * 0.5, this.ctx.currentTime, 0.25);
+  }
+
   suspend(paused) {
     if (!this.ctx) return;
     // Só os efeitos calam: a música continua (o jogo abafa pela intensidade)
     if (this.ctx.state === 'suspended' && !paused) this.ctx.resume();
     this.sfx.gain.setTargetAtTime(paused ? 0 : 1, this.ctx.currentTime, 0.04);
+  }
+
+  // Bipes do painel de menu (VFD): navegar, trocar valor e confirmar. Vão direto no geral: os efeitos
+  // da corrida ficam mudos nos menus, estes não.
+  uiBlip(kind = 'move') {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    if (!this.uiGain) { this.uiGain = ctx.createGain(); this.uiGain.connect(this.master); }
+    this.uiGain.gain.value = 0.9 * (this.volumes.effects ?? 0.8);
+    const notes = kind === 'select' ? [[1320, 0], [1980, 0.055]] : kind === 'change' ? [[1180, 0], [1480, 0.03]] : [[1660, 0]];
+    for (const [freq, at] of notes) {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, t + at);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.94, t + at + 0.05);
+      const tone = ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.value = 3200;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(kind === 'move' ? 0.035 : 0.05, t + at + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + (kind === 'select' ? 0.09 : 0.05));
+      osc.connect(tone).connect(g).connect(this.uiGain);
+      osc.start(t + at);
+      osc.stop(t + at + 0.12);
+    }
+  }
+
+  // Vidro estourando: estalos agudos e curtos em sequência (farol, lanterna).
+  glass(strength = 1) {
+    if (!this.ctx || !this.noiseBuffer) return;
+    const ctx = this.ctx;
+    for (let i = 0; i < 7; i++) {
+      const t = ctx.currentTime + i * (0.012 + Math.random() * 0.035);
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.playbackRate.value = 1.4 + Math.random();
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = 3800 + Math.random() * 4200;
+      band.Q.value = 6;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.35 * strength * (1 - i / 9), t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + Math.random() * 0.06);
+      src.connect(band).connect(g).connect(this.fx);
+      src.start(t, Math.random());
+      src.stop(t + 0.14);
+    }
   }
 
   // Pancada: estouro de ruído grave com decaimento rápido. Com at = { x, z } sai da posição da batida.

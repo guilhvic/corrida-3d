@@ -1,6 +1,7 @@
 // Perfil do piloto: estatísticas de carreira salvas no navegador e o rastreador que as atualiza durante a corrida.
 // Módulo puro (sem three.js): o main.js chama os métodos do ProfileTracker nos eventos do jogo.
 import { newlyUnlocked } from './achievements.js';
+import { STARTER_CAR, CAR_PRICES } from './shop.js';
 
 const STORAGE_KEY = 'corrida3d.perfil';
 const GRADES = ['SS', 'S', 'A', 'B', 'C', 'D'];
@@ -29,6 +30,12 @@ export function emptyProfile() {
     byCar: {},           // id -> km
     variants: {},        // 'pista:horário' -> corridas terminadas
     carsFinished: {},    // id -> corridas terminadas
+    money: 0,            // ¥ ganhos nas corridas (gastos no reparo da lataria)
+    earned: 0,           // ¥ ganhos na carreira inteira
+    damage: {},          // lataria de cada carro: id -> { front, rear, left, right, scratchL, scratchR, hits, broken }
+    ownedCars: {},       // BODYSHOP: carros comprados (id -> data)
+    upgrades: {},        // preparação comprada: id do carro -> { motor: 2, pneus: 1, ... }
+    bought: {},          // peças compradas: 'shop:tipo:id' -> data
     feats: {},           // conquistas de evento único: cleanRace, hakoneKing, rainKing
     unlocked: {},        // id da conquista -> data
   };
@@ -48,6 +55,12 @@ export function loadProfile(storage = globalThis.localStorage) {
   try { return merge(emptyProfile(), JSON.parse(storage.getItem(STORAGE_KEY))); } catch { return emptyProfile(); }
 }
 
+// Liberações da garagem: medalhas mais as peças compradas no BODYSHOP.
+export const garageUnlocks = (profile) => ({ ...profile.unlocked, ...profile.bought });
+
+// Carro na garagem do jogador (o de largada sempre).
+export const ownsCar = (profile, id) => id === STARTER_CAR || !!profile.ownedCars?.[id] || CAR_PRICES[id] === undefined;
+
 export function saveProfile(profile, storage = globalThis.localStorage) {
   try { storage.setItem(STORAGE_KEY, JSON.stringify(profile)); } catch { /* sem storage */ }
 }
@@ -59,6 +72,15 @@ export class ProfileTracker {
     this.race = null;
     this.saveTimer = 0;
     this.dirty = false;
+    // Loja nova: quem já corria com um carro antes dela fica com ele de graça.
+    const owned = this.profile.ownedCars;
+    if (!Object.keys(owned).length) {
+      const date = new Date().toISOString().slice(0, 10);
+      owned[STARTER_CAR] = date;
+      for (const [id, km] of Object.entries(this.profile.byCar)) if (km > 0.05) owned[id] = date;
+      for (const id of Object.keys(this.profile.carsFinished)) owned[id] = date;
+      this.save();
+    }
   }
 
   get unlocked() { return this.profile.unlocked; }
@@ -145,6 +167,58 @@ export class ProfileTracker {
   abandon() {
     this.race = null;
     this.save();
+  }
+
+  // --- Dinheiro e lataria -------------------------------------------------------------------------
+  // Prêmio da corrida: pontos valem dinheiro e o pódio paga bônus (grid de 2 ou mais).
+  static prize({ total, position, racers }) {
+    const bonus = racers > 1 ? Math.max(0, racers - position + 1) * 250 : 0;
+    return Math.round(total / 20) + bonus;
+  }
+
+  // Lataria de um carro (ou null se ele está inteiro).
+  static damageOf(profile, carId) {
+    const d = profile.damage?.[carId];
+    return d && typeof d === 'object' && typeof d.front === 'number' ? d : null;
+  }
+
+  // Conserto da lataria: amassado custa mais que risco, peça arrancada custa por peça; na centena.
+  static repairCost(damage) {
+    if (!damage) return 0;
+    const dents = (damage.front + damage.rear + damage.left + damage.right) * 1200;
+    const scratches = (damage.scratchL + damage.scratchR) * 500;
+    const parts = (damage.broken?.length || 0) * 450;
+    return Math.round((dents + scratches + parts) / 100) * 100;
+  }
+
+  earn(amount) {
+    this.profile.money += amount;
+    this.profile.earned += amount;
+    this.dirty = true;
+    return this.profile.money;
+  }
+
+  // Paga se tiver saldo. Devolve se deu certo.
+  spend(amount) {
+    if (amount > this.profile.money) return false;
+    this.profile.money -= amount;
+    this.save();
+    return true;
+  }
+
+  // --- BODYSHOP ------------------------------------------------------------------------------------
+  giveCar(id) { this.profile.ownedCars[id] = new Date().toISOString().slice(0, 10); this.dirty = true; }
+  setUpgrade(carId, upgradeId, level) {
+    (this.profile.upgrades[carId] ??= {})[upgradeId] = level;
+    this.dirty = true;
+  }
+  giveItem(key) { this.profile.bought[key] = new Date().toISOString().slice(0, 10); this.dirty = true; }
+
+  // A lataria fica como está entre as corridas: bater só sai do bolso na garagem.
+  saveDamage(carId, damage) {
+    if (!this.profile.damage || typeof this.profile.damage.front === 'number') this.profile.damage = {};
+    this.profile.damage[carId] = { ...damage };
+    this.dirty = true;
   }
 
   // Conquistas liberadas agora (e já gravadas como liberadas)

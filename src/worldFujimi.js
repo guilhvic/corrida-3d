@@ -3,7 +3,8 @@
 // Mesmo espírito PS2 da cidade: texturas pequenas, luz "pintada" e poucos draw calls (mergeStatic no final).
 import * as THREE from 'three';
 import { ROAD_HALF_WIDTH, WALL_OFFSET } from './track.js';
-import { countryRoadTextures, tireMarksTexture, roadWordTexture } from './textures.js';
+import { buildTreeField, buildUndergrowth, buildTufts } from './trees.js';
+import { groundTextures, vergeTextures, countryRoadTextures, tireMarksTexture, roadWordTexture } from './textures.js';
 import {
   mulberry32, canvasTexture, noise, ribbon, mergeStatic, distanceToTrack, disposeTree, glowTexture, vendingTexture, JP_FONT,
 } from './world.js';
@@ -331,10 +332,9 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
   }
 
   // --- Relevo em malha: grama nos baixios, mata escura nas encostas ----------------------------------------
-  const grassTex = canvasTexture(64, 64, (ctx, w, h) => {
-    noise(ctx, w, h, '#d8d8d0', 0.35, 1400, rand, 2);
-    for (let i = 0; i < 60; i++) { ctx.fillStyle = `rgba(40,50,20,${0.1 + rand() * 0.2})`; ctx.fillRect(rand() * w, rand() * h, 1, 3); }
-  });
+  // Chão: capim com touceiras, terra e pedrinhas (com relevo), tingido por vértice mais adiante.
+  const groundMaps = groundTextures(71);
+  for (const t of Object.values(groundMaps)) t.repeat.set(1, 1);
   {
     const HALF = 780, STEP = 12, cols = Math.round((HALF * 2) / STEP) + 1;
     const pos = [], uv = [], idx = [], heights = new Float32Array(cols * cols);
@@ -343,7 +343,7 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
       const h = heightAt(px, pz);
       heights[k * cols + i] = h;
       pos.push(px, h, pz);
-      uv.push(px / 10, pz / 10);
+      uv.push(px / 8, pz / 8);
     }
     for (let k = 0; k < cols - 1; k++) for (let i = 0; i < cols - 1; i++) {
       const a = k * cols + i, b = a + cols, c = a + 1, d = b + 1;
@@ -365,7 +365,7 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
       col.push(c.r, c.g, c.b);
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: grassTex, vertexColors: true })));
+    add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ ...groundMaps, vertexColors: true })));
   }
 
   // --- Estrada, acostamento e guard-rail ------------------------------------------------------------------
@@ -380,14 +380,7 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
   const ruv = road.geometry.attributes.uv;
   for (let i = 0; i < ruv.count; i++) { const u = ruv.getX(i), v = ruv.getY(i); ruv.setXY(i, v, u); }
 
-  const vergeTex = canvasTexture(64, 32, (ctx, w, h) => {
-    noise(ctx, w, h, '#77705f', 0.4, 900, rand, 1);
-    for (let i = 0; i < 90; i++) {
-      const yy = rand() ** 2 * h; // mato mais denso junto ao guard-rail (v = 1 em cima)
-      ctx.fillStyle = `rgba(${60 + rand() * 40},${80 + rand() * 40},${25 + rand() * 20},0.9)`;
-      ctx.fillRect(rand() * w, yy, 1 + rand() * 2, 1 + rand() * 3);
-    }
-  });
+  const vergeMaps = vergeTextures();
   const guardTex = canvasTexture(64, 16, (ctx, w, h) => {
     const g = ctx.createLinearGradient(0, 0, 0, h);
     g.addColorStop(0, '#f4f4ee'); g.addColorStop(0.3, '#d9dad4'); g.addColorStop(0.45, '#8e908c');
@@ -397,7 +390,7 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
     ctx.fillStyle = '#6b6c68'; ctx.fillRect(0, 0, 2, h); // emenda com parafusos
     ctx.fillStyle = '#555'; for (const yy of [4, 11]) ctx.fillRect(5, yy, 2, 2);
   });
-  const vergeMat = new THREE.MeshLambertMaterial({ map: vergeTex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const vergeMat = new THREE.MeshLambertMaterial({ ...vergeMaps, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   const guardMat = new THREE.MeshLambertMaterial({ map: guardTex });
   const guardBackMat = new THREE.MeshLambertMaterial({ color: 0x9a9b96 });
   for (const side of [1, -1]) {
@@ -879,22 +872,14 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
         if (rand() < 0.6) cedars.push([px, pz, 0.9 + rand() * 0.5]);
       }
     }
-    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.35, 4, 5); trunkGeo.translate(0, 2, 0);
-    const lowerGeo = new THREE.ConeGeometry(2.6, 9, 7); lowerGeo.translate(0, 7.5, 0);
-    const upperGeo = new THREE.ConeGeometry(1.7, 7, 7); upperGeo.translate(0, 12.5, 0);
-    const foliage = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshLambertMaterial({ color: 0x4a3222 }), cedars.length);
-    const lower = new THREE.InstancedMesh(lowerGeo, foliage, cedars.length);
-    const upper = new THREE.InstancedMesh(upperGeo, foliage, cedars.length);
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
-    cedars.forEach(([px, pz, k, h = heightAt(px, pz)], i) => {
-      q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rand() * Math.PI);
-      m4.compose(p.set(px, h - 0.6, pz), q, sc.set(k, k * (0.9 + rand() * 0.3), k));
-      trunks.setMatrixAt(i, m4); lower.setMatrixAt(i, m4); upper.setMatrixAt(i, m4);
-      c.setRGB(0.035 + rand() * 0.025, 0.07 + rand() * 0.035, 0.035 + rand() * 0.02);
-      lower.setColorAt(i, c); upper.setColorAt(i, c.multiplyScalar(1.12));
+    const c = new THREE.Color();
+    const cedarField = buildTreeField({
+      kind: 'cedar', rand, trunkColor: 0x4a3222,
+      items: cedars.map(([px, pz, k, h = heightAt(px, pz)]) => [px, h - 0.4, pz, k]),
     });
-    add(trunks); add(lower); add(upper);
+    cedars.forEach((_, i) => cedarField.setColor(i, c.setRGB(0.035 + rand() * 0.025, 0.07 + rand() * 0.035, 0.035 + rand() * 0.02)));
+    cedarField.applyColors();
+    add(cedarField.group);
 
     const roundTrees = [...yardTrees];
     for (let s = 0; s < track.length; s += 23) {
@@ -903,18 +888,44 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
       if (x[j] > 180 || !free(px, pz, 3) || distanceToTrack(track, px, pz) < WALL_OFFSET + 3) continue;
       roundTrees.push([px, pz, 0.8 + rand() * 0.6]);
     }
-    const rTrunk = new THREE.CylinderGeometry(0.15, 0.22, 2.6, 5); rTrunk.translate(0, 1.3, 0);
-    const crown = new THREE.IcosahedronGeometry(2.2, 0); crown.translate(0, 3.8, 0);
-    const rt = new THREE.InstancedMesh(rTrunk, new THREE.MeshLambertMaterial({ color: 0x4c3a2a }), roundTrees.length);
-    const rc = new THREE.InstancedMesh(crown, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), roundTrees.length);
-    roundTrees.forEach(([px, pz, k], i) => {
-      q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rand() * Math.PI);
-      m4.compose(p.set(px, 0, pz), q, sc.set(k, k, k));
-      rt.setMatrixAt(i, m4); rc.setMatrixAt(i, m4);
-      c.setRGB(0.07 + rand() * 0.05, 0.13 + rand() * 0.06, 0.03 + rand() * 0.02);
-      rc.setColorAt(i, c);
+    const roundField = buildTreeField({
+      kind: 'broadleaf', rand, trunkColor: 0x4c3a2a,
+      items: roundTrees.map(([px, pz, k]) => [px, heightAt(px, pz) - 0.1, pz, k]),
     });
-    add(rt); add(rc);
+    roundTrees.forEach((_, i) => roundField.setColor(i, c.setRGB(0.07 + rand() * 0.05, 0.13 + rand() * 0.06, 0.03 + rand() * 0.02)));
+    roundField.applyColors();
+    add(roundField.group);
+
+    // Mato na beira: moitas logo depois do guard-rail, onde a câmera passa raspando.
+    const bushes = [];
+    for (let s = 0; s < track.length; s += 3) {
+      const j = at(s);
+      for (const sd of [1, -1]) {
+        if (rand() < 0.4) continue;
+        const off = WALL_OFFSET + 1.2 + rand() * 4;
+        const px = x[j] + nx[j] * sd * off, pz = z[j] + nz[j] * sd * off;
+        if (!free(px, pz, 1) || distanceToTrack(track, px, pz) < WALL_OFFSET + 1) continue;
+        bushes.push([px, heightAt(px, pz) - 0.15, pz, 0.7 + rand() * 0.9]);
+      }
+    }
+    // Capim no pé do guard-rail: cartões cruzados, bem rente à pista.
+    const tufts = [];
+    for (let s2 = 0; s2 < track.length; s2 += 1.5) {
+      const j = at(s2);
+      for (const sd of [1, -1]) {
+        if (rand() < 0.35) continue;
+        const off = WALL_OFFSET + 0.25 + rand() * 2.2;
+        const px = x[j] + nx[j] * sd * off, pz = z[j] + nz[j] * sd * off;
+        if (!free(px, pz, 0.5)) continue;
+        tufts.push([px, heightAt(px, pz) - 0.04, pz, 0.7 + rand() * 0.7]);
+      }
+    }
+    add(buildTufts({ items: tufts, rand }));
+
+    const bushField = buildUndergrowth({ items: bushes, rand });
+    bushes.forEach((_, i) => bushField.setColor(i, c.setRGB(0.09 + rand() * 0.06, 0.15 + rand() * 0.07, 0.04 + rand() * 0.03)));
+    bushField.applyColors();
+    add(bushField.group);
   }
 
   // --- Ferrovia e trem local de dois vagões ---------------------------------------------------------------
@@ -1293,6 +1304,8 @@ export function buildFujimiWorld(scene, track, { time = 'tarde' } = {}) {
         train.position.set(CX + dir * d, 0, RAIL_Z);
         train.rotation.y = dir > 0 ? 0 : Math.PI;
       }
+      // Para o sino da passagem de nível (src/ambience.js): onde o trem está, se estiver passando.
+      world.train = train.visible ? { x: train.position.x, z: RAIL_Z } : null;
     },
     dispose: () => disposeTree(root),
   };

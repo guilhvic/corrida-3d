@@ -4,6 +4,8 @@
 import * as THREE from 'three';
 
 export const MAX_LINES = { side: 48, top: 32, end: 24 };
+export const MAX_HITS = 6; // amassados localizados: onde bateu, para que lado e quão fundo
+export const MAX_TORN = 5; // painéis arrancados (capô, para-choques, portas): caixas no referencial do carro
 
 // Tintas: sólida, metálica e perolizada
 export function paintMaterial({ color, finish = 'solid', envMap = null, vertexColors = false }) {
@@ -68,6 +70,32 @@ const DAMAGE_VERTEX = /* glsl */ `
   float dmgAlong = 0.6 + 0.4 * sin(dmgP.z * 3.1 + 1.0);
   transformed.x -= uDent.z * smoothstep(0.45, 0.8, dmgP.x) * dmgBand * 0.075 * dmgN * dmgAlong;
   transformed.x += uDent.w * smoothstep(-0.45, -0.8, dmgP.x) * dmgBand * 0.075 * dmgN * dmgAlong;
+  // Amassados no ponto da batida: cada impacto afunda a lataria em volta de onde encostou, na direção
+  // em que veio, com a borda enrugada (a chapa não afunda lisa). Só no carro do jogador (CAR_LOCAL_DAMAGE):
+  // nos rivais esses laços ficam fora do shader.
+  vDmgHit = 0.0;
+  #ifdef CAR_LOCAL_DAMAGE
+  float hitSum = 0.0;
+  for (int h = 0; h < ${MAX_HITS}; h++) {
+    float radius = uHitPos[h].w;
+    if (radius <= 0.0) continue;
+    vec3 rel = dmgP - uHitPos[h].xyz;
+    float d = length(rel) / radius;
+    if (d >= 1.0) continue;
+    float fall = 1.0 - d * d;
+    float wrinkle = 0.75 + 0.25 * sin(dmgP.x * 41.0 + dmgP.z * 29.0 + float(h));
+    transformed += uHitDir[h].xyz * (uHitDir[h].w * fall * fall * wrinkle);
+    hitSum += fall * uHitDir[h].w * 3.0;
+  }
+  vDmgHit = clamp(hitSum, 0.0, 1.0);
+  // Painel arrancado: o que fica por baixo (estrutura, cofre do motor) afunda uns centímetros.
+  for (int k = 0; k < ${MAX_TORN}; k++) {
+    if (uTornMax[k].w <= 0.0) continue;
+    if (all(greaterThanEqual(dmgP, uTornMin[k].xyz)) && all(lessThanEqual(dmgP, uTornMax[k].xyz))) {
+      transformed -= normal * 0.045;
+    }
+  }
+  #endif
   vDmgPos = dmgP;
 `;
 
@@ -85,6 +113,22 @@ const SCRATCH_FRAGMENT = /* glsl */ `
     float dmgEnds = uDent.x * smoothstep(uCarZ.y - 0.5, uCarZ.y, vDmgPos.z) + uDent.y * smoothstep(uCarZ.x + 0.5, uCarZ.x, vDmgPos.z);
     float crack = step(0.82, fract(sin(dot(floor(vDmgPos.xy * 40.0 + vDmgPos.z * 13.0), vec2(12.9898, 78.233))) * 43758.5453));
     diffuseColor.rgb *= 1.0 - clamp(dmgEnds * dmgLowF, 0.0, 1.0) * (0.25 + 0.35 * crack);
+    #ifdef CAR_LOCAL_DAMAGE
+    // Chapa afundada perde verniz: fica fosca, escura e com a pintura estalada.
+    diffuseColor.rgb *= 1.0 - vDmgHit * (0.3 + 0.4 * crack);
+    // Onde um painel foi arrancado. Modo (w): 1 = para-choque (sobra a estrutura, escura e crua),
+    // 2 = capô (a pele de cima some e aparece o motor), 3 = porta (a pele lateral some e aparece o interior).
+    for (int k = 0; k < ${MAX_TORN}; k++) {
+      float tornMode = uTornMax[k].w;
+      if (tornMode <= 0.0) continue;
+      if (all(greaterThanEqual(vDmgPos, uTornMin[k].xyz)) && all(lessThanEqual(vDmgPos, uTornMax[k].xyz))) {
+        vec3 tornN = normalize(vObjN);
+        if (tornMode > 1.5 && tornMode < 2.5 && tornN.y > 0.45) discard;
+        if (tornMode > 2.5 && abs(tornN.x) > 0.45) discard;
+        diffuseColor.rgb = mix(vec3(0.035, 0.034, 0.033), vec3(0.16, 0.09, 0.05), crack * 0.5);
+      }
+    }
+    #endif
   }
 `;
 
@@ -148,17 +192,22 @@ export function lineUniforms(lines = {}) {
 }
 
 // Aplica danos (todos), vãos (pintura da carroceria) e Fresnel (vidros) no shader do material.
-export function patchCarMaterial(material, uniforms, { scratches = false, gaps = false } = {}) {
+// local: amassados no ponto e painéis arrancados (só o carro do jogador compila esses trechos).
+export function patchCarMaterial(material, uniforms, { scratches = false, gaps = false, local = false } = {}) {
   if (!material || material.isShaderMaterial || material.userData.carPatched) return;
   material.userData.carPatched = true;
   const glass = !!material.userData.fresnelGlass;
+  if (local) material.defines = { ...material.defines, CAR_LOCAL_DAMAGE: '' };
+  // O three reaproveita programas pelo texto do onBeforeCompile, que é o mesmo para todos: a chave precisa
+  // dizer quais trechos entraram, senão dois materiais diferentes dividem o mesmo shader.
+  material.customProgramCacheKey = () => `car-${scratches ? 1 : 0}${gaps ? 1 : 0}${glass ? 1 : 0}${local ? 1 : 0}`;
   material.onBeforeCompile = function (shader, renderer) {
     THREE.Material.prototype.onBeforeCompile.call(this, shader, renderer); // névoa do jogo
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform vec4 uDent;\nuniform vec2 uCarZ;\nvarying vec3 vDmgPos;\nvarying vec3 vObjN;')
+      .replace('#include <common>', `#include <common>\nuniform vec4 uDent;\nuniform vec2 uCarZ;\nuniform vec4 uHitPos[${MAX_HITS}];\nuniform vec4 uHitDir[${MAX_HITS}];\nuniform vec4 uTornMin[${MAX_TORN}];\nuniform vec4 uTornMax[${MAX_TORN}];\nvarying vec3 vDmgPos;\nvarying vec3 vObjN;\nvarying float vDmgHit;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${DAMAGE_VERTEX}`);
-    let head = '#include <common>\nuniform vec4 uDent;\nuniform vec2 uCarZ;\nuniform vec2 uScratch;\nvarying vec3 vDmgPos;\nvarying vec3 vObjN;';
+    let head = `#include <common>\nuniform vec4 uDent;\nuniform vec2 uCarZ;\nuniform vec2 uScratch;\nuniform vec4 uTornMin[${MAX_TORN}];\nuniform vec4 uTornMax[${MAX_TORN}];\nvarying vec3 vDmgPos;\nvarying vec3 vObjN;\nvarying float vDmgHit;`;
     if (gaps) head += LINES_COMMON;
     let frag = shader.fragmentShader.replace('#include <common>', head);
     if (scratches || gaps) {

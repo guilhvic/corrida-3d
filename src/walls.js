@@ -45,7 +45,9 @@ export function collideWalls(c, track, idx) {
     if (vn >= 0) continue; // já se afastando
 
     const rn = rz * nx - rx * nz; // (r × n)_y
-    const jn = -(1 + WALL.restitution) * vn / (1 / m + (rn * rn) / I);
+    // Lataria absorve: quanto mais forte a batida, menos o carro quica (a energia vai para o amassado).
+    const e = WALL.restitution * Math.max(0.25, 1 - Math.max(0, -vn - 4) / 14);
+    const jn = -(1 + e) * vn / (1 / m + (rn * rn) / I);
     c.vx += (jn * nx) / m;
     c.vz += (jn * nz) / m;
     c.r += (jn * rn) / I;

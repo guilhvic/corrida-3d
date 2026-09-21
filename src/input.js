@@ -2,7 +2,7 @@
 // Teclado usa rampas para imitar um controle analógico.
 import { t } from './i18n.js';
 
-const BLOCK = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
+const BLOCK = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'F11']);
 
 // Botões do mapeamento standard (Xbox): A=0 B=1 X=2 Y=3 LB=4 RB=5 LT=6 RT=7 View=8 Menu=9 LS=10 RS=11 D-pad 12-15.
 export const PAD = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
@@ -106,6 +106,7 @@ export class Input {
       crt: k.has('KeyV'),
       debug: k.has('KeyB'),
       freeCam: k.has('KeyF'),
+      fullscreen: k.has('F11') || k.has('F10'),
       music: k.has('KeyK'),
       nextSong: k.has('KeyL'),
       confirm: k.has('Enter'),
