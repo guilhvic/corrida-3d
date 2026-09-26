@@ -1,4 +1,5 @@
-// Garagem: opções de visual por carro (pintura, rodas, aerofólio, altura, adesivo e cor do rastro de drift).
+// Garagem: opções de visual por carro (pintura, rodas, kit de carroceria, alargadores, capô, aerofólio,
+// altura, adesivo e cor do rastro de drift).
 // Salvas no navegador por carro. Módulo puro (sem three.js): o modelo lê isto em createCarModel.
 // Itens com unlock só ficam disponíveis depois da conquista com esse id (achievements.js).
 
@@ -60,6 +61,26 @@ export const WINGS = [
   { id: 'duck', name: 'DUCKTAIL' },
 ];
 
+// Kits de carroceria: para-choques, saias e o que vem com eles. As peças voam junto com o para-choque numa
+// batida (carKits.js). massa: o que o kit soma ou tira do carro (kg).
+export const KITS = [
+  { id: 'original', name: 'CARROCERIA ORIGINAL' },
+  { id: 'rua', name: 'KIT DE RUA', mass: 6, shop: 4500 },
+  { id: 'pista', name: 'KIT DE PISTA (FIBRA)', mass: 3, shop: 9000 },
+];
+
+export const FENDERS = [
+  { id: 'original', name: 'PARALAMAS ORIGINAL' },
+  { id: 'liso', name: 'ALARGADOR LISO', mass: 6, shop: 5500 },
+  { id: 'aparafusado', name: 'ALARGADOR APARAFUSADO', mass: 8, shop: 7000 },
+];
+
+export const HOODS = [
+  { id: 'original', name: 'CAPÔ ORIGINAL' },
+  { id: 'fibra', name: 'CAPÔ DE FIBRA', mass: -9, shop: 6000 },
+  { id: 'tomada', name: 'CAPÔ DE FIBRA COM TOMADA', mass: -7, shop: 8500 },
+];
+
 export const DROPS = [
   { id: 0, name: 'ALTURA ORIGINAL', drop: 0 },
   { id: 2, name: 'REBAIXADO -2 CM', drop: 0.02 },
@@ -101,8 +122,8 @@ export const TRAILS = [
   { id: 'aurora', name: 'AURORA', color: 'aurora', unlock: 'climas' },
 ];
 
-export const GARAGE_OPTIONS = { paint: PAINTS, rims: RIMS, rimColor: RIM_COLORS, wing: WINGS, drop: DROPS, sticker: STICKERS, trail: TRAILS };
-export const DEFAULT_GARAGE = { paint: 'original', rims: 'original', rimColor: 'original', wing: 'original', drop: 0, sticker: 'none', trail: 'auto' };
+export const GARAGE_OPTIONS = { paint: PAINTS, rims: RIMS, rimColor: RIM_COLORS, kit: KITS, fenders: FENDERS, hood: HOODS, wing: WINGS, drop: DROPS, sticker: STICKERS, trail: TRAILS };
+export const DEFAULT_GARAGE = { paint: 'original', rims: 'original', rimColor: 'original', kit: 'original', fenders: 'original', hood: 'original', wing: 'original', drop: 0, sticker: 'none', trail: 'auto' };
 
 const find = (list, id) => list.find((o) => o.id === id) || list[0];
 
@@ -136,12 +157,20 @@ export function saveGarage(carId, config) {
 }
 
 // Valores prontos para o modelo 3D e o rastro.
+// Quanto os kits somam ou tiram de peso (kg): fibra alivia, alargador e kit de rua pesam.
+export function kitMass(config) {
+  return (find(KITS, config.kit).mass || 0) + (find(FENDERS, config.fenders).mass || 0) + (find(HOODS, config.hood).mass || 0);
+}
+
 export function garageLook(config) {
   return {
     color: find(PAINTS, config.paint).color,
     finish: find(PAINTS, config.paint).finish ?? 'solid',
     rims: config.rims === 'original' ? null : config.rims,
     rimColor: find(RIM_COLORS, config.rimColor).color,
+    kit: config.kit,
+    fenders: config.fenders,
+    hood: config.hood,
     wing: config.wing,
     drop: find(DROPS, config.drop).drop,
     sticker: find(STICKERS, config.sticker),

@@ -86,9 +86,16 @@ export class CarAudio {
     this.createEngineNode();
   }
 
+  // Estágio da preparação do motor (0 a 3): turbo maior, válvula de alívio mais forte e mais estouros.
+  setEngineTune(level) {
+    this.engineTune = Math.max(0, Math.min(3, level || 0));
+    this.engineNode?.parameters.get('tune')?.setValueAtTime(this.engineTune, this.ctx?.currentTime ?? 0);
+  }
+
   createEngineNode() {
     const ctx = this.ctx;
     const node = (this.engineNode = new AudioWorkletNode(ctx, 'engine', { outputChannelCount: [1], processorOptions: { profile: this.profile } }));
+    node.parameters.get('tune').value = this.engineTune ?? 0;
     node.connect(this.engineGain);
     this.engine = {
       set: (rpm, load, t) => {
@@ -217,6 +224,33 @@ export class CarAudio {
   setEcho(amount) {
     if (!this.echoSend) return;
     this.echoSend.gain.setTargetAtTime(amount * 0.5, this.ctx.currentTime, 0.25);
+  }
+
+  // Página escondida (outra aba, janela minimizada, painel do navegador fechado): o som inteiro para, música
+  // incluída. Sem isto o AudioWorklet continua gerando som mesmo com o jogo parado — e em janelas embutidas a
+  // música segue tocando depois de o jogo sumir da tela.
+  setPageVisible(visible, paused) {
+    if (!this.ctx) return;
+    if (!visible) { this.ctx.suspend?.(); return; }
+    this.ctx.resume?.();
+    this.suspend(paused);
+  }
+
+  // Fim da página: desliga tudo e devolve o contexto de áudio ao sistema.
+  dispose() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.ctx = null;
+    this.workletReady = false;
+    this.ambience?.clear();
+    this.music?.disconnect();
+    this.engineNode?.disconnect();
+    for (const v of this.voices) { v?.out.disconnect(); v?.node.disconnect(); v?.skid.disconnect(); }
+    this.voices = [];
+    this.music = null;
+    this.engineNode = null;
+    this.engine = null;
+    try { ctx.close(); } catch { /* já fechado */ }
   }
 
   suspend(paused) {

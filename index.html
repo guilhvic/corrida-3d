@@ -364,6 +364,14 @@
     #shop-msg { min-height: 1.2em; color: var(--amber); font-family: var(--dot); font-size: 18px; }
     .garage-money { margin: -6px 0 10px; font-family: var(--dot); font-size: 18px; color: var(--vfd); letter-spacing: 0.06em; }
     .garage-money .broke { color: var(--red); }
+    /* Ficha de dano: desenho do carro visto de cima com o que está amassado ou faltando, e o preço de cada item */
+    .damage-box { border: 1px solid rgba(61,255,196,0.25); background: rgba(6,20,18,0.5); padding: 8px 10px 10px; margin: 10px 0 0; }
+    .damage-box canvas { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    #damage-list { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; font-family: var(--dot); font-size: 17px; letter-spacing: 0.04em; margin-top: 6px; }
+    #damage-list span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #damage-list b { color: var(--amber); font-weight: normal; }
+    #damage-list .total { color: var(--vfd); border-top: 1px solid rgba(61,255,196,0.25); padding-top: 3px; margin-top: 3px; }
+    #damage-list .broke { color: var(--red); }
     .menu-card.garage .selector { grid-template-columns: 90px 34px minmax(0, 1fr) 34px; }
     .menu-card.garage .sel-value b { font-size: 23px; }
     #menu-pad[data-ok="true"] { color: var(--vfd); }
@@ -702,6 +710,24 @@
             <div class="sel-value"><b></b><small></small></div>
             <button type="button" class="sel-arrow" data-dir="1" aria-label="COR RODA: próximo">▶</button>
           </div>
+          <div class="selector" data-nav data-key="g-kit">
+            <span class="sel-label">KIT</span>
+            <button type="button" class="sel-arrow" data-dir="-1" aria-label="KIT: anterior">◀</button>
+            <div class="sel-value"><b></b><small></small></div>
+            <button type="button" class="sel-arrow" data-dir="1" aria-label="KIT: próximo">▶</button>
+          </div>
+          <div class="selector" data-nav data-key="g-fenders">
+            <span class="sel-label">ALARGADOR</span>
+            <button type="button" class="sel-arrow" data-dir="-1" aria-label="ALARGADOR: anterior">◀</button>
+            <div class="sel-value"><b></b><small></small></div>
+            <button type="button" class="sel-arrow" data-dir="1" aria-label="ALARGADOR: próximo">▶</button>
+          </div>
+          <div class="selector" data-nav data-key="g-hood">
+            <span class="sel-label">CAPÔ</span>
+            <button type="button" class="sel-arrow" data-dir="-1" aria-label="CAPÔ: anterior">◀</button>
+            <div class="sel-value"><b></b><small></small></div>
+            <button type="button" class="sel-arrow" data-dir="1" aria-label="CAPÔ: próximo">▶</button>
+          </div>
           <div class="selector" data-nav data-key="g-wing">
             <span class="sel-label">AEROFÓLIO</span>
             <button type="button" class="sel-arrow" data-dir="-1" aria-label="AEROFÓLIO: anterior">◀</button>
@@ -726,6 +752,11 @@
             <div class="sel-value"><b></b><small></small></div>
             <button type="button" class="sel-arrow" data-dir="1" aria-label="RASTRO: próximo">▶</button>
           </div>
+      </div>
+      <div class="damage-box" id="damage-box" hidden>
+        <div class="caption">FICHA DE DANO</div>
+        <canvas id="damage-sheet" width="620" height="240"></canvas>
+        <div id="damage-list"></div>
       </div>
       <div class="menu-actions">
         <button type="button" class="menu-btn primary" data-nav data-action="back">PRONTO</button>

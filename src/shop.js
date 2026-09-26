@@ -3,7 +3,7 @@
 // - Preparação: seis kits por carro, cada um em três estágios, que mexem no acerto de verdade (physics.js).
 // - Peças: itens da garagem que antes só saíam por medalha, mais algumas exclusivas da loja.
 import { CAR } from './physics.js';
-import { GARAGE_OPTIONS } from './garage.js';
+import { GARAGE_OPTIONS, kitMass } from './garage.js';
 
 export const STARTER_CAR = 'kaze180';
 export const CAR_PRICES = { kaze180: 0, tsubame: 12000, kaminari86: 15000, seiran: 22000 };
@@ -66,8 +66,9 @@ export const UPGRADES = [
   },
 ];
 
-// Acerto do carro com a preparação comprada (levels: { motor: 2, pneus: 1, ... }).
-export function upgradedParams(carDef, levels = {}) {
+// Acerto do carro com a preparação comprada (levels: { motor: 2, pneus: 1, ... }) e com o peso dos kits de
+// carroceria da garagem (garage: a configuração salva do carro; sem ela, só a preparação).
+export function upgradedParams(carDef, levels = {}, garage = null) {
   const base = { ...CAR, ...carDef.params };
   const out = { ...carDef.params };
   for (const u of UPGRADES) {
@@ -77,12 +78,22 @@ export function upgradedParams(carDef, levels = {}) {
     for (const [k, m] of Object.entries(stage.mult || {})) out[k] = base[k] * m;
     for (const [k, a] of Object.entries(stage.add || {})) out[k] = base[k] + a;
   }
+  const dm = garage ? kitMass(garage) : 0;
+  if (dm) {
+    const was = out.mass ?? base.mass;
+    out.mass = was + dm;
+    // A inércia acompanha a massa: capô de fibra tira peso da ponta e o carro gira um pouco mais fácil.
+    out.inertia = (out.inertia ?? base.inertia) * (out.mass / was);
+  }
   return out;
 }
 
 // Peças: preço por tipo para os itens de medalha; os exclusivos da loja trazem o preço no item (shop).
 export const PART_SLOTS = [
   ['paint', 'PINTURA', 3000],
+  ['kit', 'KIT DE CARROCERIA', 5000],
+  ['fenders', 'ALARGADORES', 6000],
+  ['hood', 'CAPÔ', 6000],
   ['rims', 'RODAS', 5000],
   ['rimColor', 'COR DA RODA', 2000],
   ['sticker', 'ADESIVO', 2500],

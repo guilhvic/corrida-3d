@@ -19,6 +19,18 @@ A tela inicial tem **SINGLEPLAYER**, **BODYSHOP**, **PERFIL**, **MULTIPLAYER** (
 
 **Tremor e desfoque de movimento:** a câmera treme nas batidas (na mureta, em outro carro ou num cone forte), com intensidade que cresce com a força do impacto e anda por ruído suave em vez de chacoalhar ao acaso; em alta velocidade e na calçada entra um zumbido fino, e no cockpit o tremor é menor. O desfoque de movimento borra as bordas da imagem a partir do centro conforme a velocidade (mais nas câmeras de dentro) e na direção em que a imagem anda quando a câmera gira (drift, curvas, tremor), com uma pancada extra na batida; a exposição é de 1/60 s, então o borrão é o mesmo em 30, 60 ou 144 quadros por segundo. Os dois têm nível nas CONFIGURAÇÕES › VÍDEO (desligado, suave, normal, forte).
 
+**Kits de carroceria (GARAGEM, à venda no BODYSHOP):** três peças que mudam a silhueta e o peso do carro
+(`src/carKits.js`). O **kit de carroceria** traz splitter, saias laterais e difusor — na cor do carro no kit de rua,
+em fibra e com canards no de pista; os **alargadores** abrem os quatro arcos de roda, lisos (pintados) ou
+aparafusados (pretos, com os parafusos aparecendo); o **capô** de fibra, liso ou com tomada de ar, tem pinos nas
+quinas e alivia uns 9 kg (os alargadores e o kit de rua pesam). O peso entra na física de verdade, junto com a
+preparação do BODYSHOP, e aparece na ficha técnica. Na batida, o que está montado no para-choque ou no capô voa
+junto com ele, e o resto fica na lataria.
+
+**Ficha de dano (GARAGEM):** o carro visto de cima com as zonas amassadas em vermelho (mais forte quanto pior),
+uma cruz onde falta cada peça e, ao lado, quanto custa consertar item por item, com o total. Só aparece quando há
+avaria, logo acima do botão de reparo.
+
 **Rivais de IA (GRID: 1 a 8 corredores):** até 7 pilotos de IA largam à frente do jogador e disputam os mesmos pontos de drift. A classificação ao vivo (por pontos) fica à esquerda, com a posição no painel de voltas; o resultado mostra a colocação final (quem ainda não terminou entra com o que tinha quando você cruzou a chegada). Os carros colidem entre si: batida acima de 2 m/s zera o combo, encostar não. A IA (`src/ai.js`) pilota com o controle de ângulo do nível Fácil: esterça para a direção da velocidade seguir a pista, planeja a frenagem pela curvatura, faz as curvas de lado, desvia e segura distância de quem está à frente e dá ré se encalhar. No nível Fácil os rivais correm com habilidade reduzida. Para testar a IA sem navegador: `node tools/ai-lab.js 7 3` (rivais, voltas); os parâmetros também estão no painel de debug (B).
 
 ## Pistas
@@ -106,6 +118,19 @@ Cada pista tem o seu fundo, sintetizado na hora como o motor e a trilha (`src/am
 - **Serra de Hakone:** vento na mata com rajadas, água escorrendo na valeta com gotas soltas, corvo no vale e o **eco do escapamento nos muros de pedra** — parte do som do motor volta atrasada, sempre presente na serra e mais forte quando o carro encosta no muro dos grampos.
 - **Circuito do porto:** zumbido grave do pátio, batidas metálicas dos contêineres e buzina de navio de vez em quando (mais a chuva, quando é o caso).
 
+### Turbo, válvula de alívio e estouros
+
+O estágio da **preparação do motor** (BODYSHOP) muda o som: turbo maior enche um pouco mais devagar e sopra mais,
+o assobio fica mais grave e mais presente, a válvula de alívio solta mais ar ao tirar o pé (e, dos estágios 2 e 3
+em diante, ainda dá o *flutter* batendo na borboleta fechada) e o escapamento estala bem mais na desaceleração,
+já a partir de um giro mais baixo. Com o motor preparado, cada estalo em desaceleração acende uma labareda curta
+na ponta do escapamento. Para ouvir fora do navegador: `node tools/render-engine.js motor.wav i4t 3` (o último
+número é o estágio).
+
+O som acompanha a página: escondeu (outra aba, janela minimizada, painel do navegador fechado), tudo cala e
+volta como estava ao reaparecer; fechou ou recarregou, o contexto de áudio é fechado de vez. Sem isso o motor e a
+música, que rodam em AudioWorklet, continuariam tocando mesmo com o jogo parado ou fora da tela.
+
 ## Música
 
 Trilha **eurobeat original e procedural** (`src/music-dsp.js`, tocada num AudioWorklet): 6 músicas, cada uma gerada de uma semente com tom, andamento (154 a 161 BPM), progressões, melodia do refrão, arpejo e timbre do lead próprios. Cada uma tem intro, verso, pré-refrão com virada e subida, refrão, break sem bumbo, refrão de novo e último refrão modulado um tom acima (~3 min), e depois passa para a próxima. Bumbo quatro por tempo com "pumping", prato aberto no contratempo, baixo em oitavas, acordes de supersaw, arpejo e lead com glide, delay e reverb. Na corrida toca cheia; no menu, na pausa e no resultado fica abafada (efeitos calam, música continua). `K` liga/desliga (fica salvo), `L` pula para a próxima. Para ouvir fora do jogo: `node tools/render-music.js musica.wav [0-5] [segundos] [compasso inicial]`.
@@ -154,6 +179,7 @@ Em todas, bater na mureta ou rodar zera o combo.
 | `src/world.js` | Cidade: asfalto molhado, calçadas, muretas, prédios, neon, postes, fiação, semáforos. |
 | `src/cityTextures.js`, `src/cityProps.js`, `src/port.js` | Texturas e modelos da cidade do porto (fachadas, térreo, varandas, telhados, mobiliário de rua) e a zona portuária (contêineres, portêineres, cais e baía). |
 | `src/carModel.js`, `src/carDesigns.js`, `src/cars/` | Modelos dos carros: partes comuns (materiais, interior, rodas, luzes, garagem, danos) e os designs de cada carro (linhas da lataria, vidros, vãos e peças). Opcional: `assets/carro.glb` (ver `assets/LEIA-ME.md`). |
+| `src/carKits.js` | Kits de carroceria da garagem: splitter, canards, saias, difusor, alargadores dos arcos e capô de fibra com pinos e tomada de ar. |
 | `src/carBody.js`, `src/carProbe.js`, `src/carParts.js`, `src/carWheels.js`, `src/carMaterials.js` | Lataria por linhas de desenho, sonda de superfície, biblioteca de peças, rodas e freios, materiais e shader de vãos/danos. |
 | `tools/estudio.html` | Estúdio para ver os carros de perto em qualquer pista, com ângulos prontos. |
 | `src/neon.js` | Bairro noturno: placas verticais salientes (atlas numa malha só), tubos de neon 3D com sequência e tremulação, contornos nos telhados, lâmpadas de marquise, lanternas de papel, telões de LED e poças de luz colorida. |

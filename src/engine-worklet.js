@@ -6,6 +6,8 @@ class EngineProcessor extends AudioWorkletProcessor {
     return [
       { name: 'rpm', defaultValue: 900, minValue: 0, maxValue: 12000, automationRate: 'k-rate' },
       { name: 'load', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      // Estágio da preparação do motor (BODYSHOP): turbo maior, mais alívio e mais estouros.
+      { name: 'tune', defaultValue: 0, minValue: 0, maxValue: 3, automationRate: 'k-rate' },
     ];
   }
 
@@ -18,6 +20,7 @@ class EngineProcessor extends AudioWorkletProcessor {
   process(_inputs, outputs, parameters) {
     const channels = outputs[0];
     this.dsp.setTarget(parameters.rpm[0], parameters.load[0]);
+    this.dsp.setTune(parameters.tune[0]);
     this.dsp.process(channels[0]);
     for (let i = 1; i < channels.length; i++) channels[i].set(channels[0]);
     return true;

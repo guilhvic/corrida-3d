@@ -325,7 +325,7 @@ export class Menu {
     const car = CARS.find((c) => c.id === it.car) ?? CARS[0];
     let html = `<h3>${it.name}</h3>`;
     if (it.kind === 'car') {
-      const s = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id]) });
+      const s = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id], loadGarage(car.id, this.unlocked)) });
       html += `<p class="note spec-desc">${t(car.description)}</p>
         <p class="note">${t('{power} cv · {torque} N·m · {mass} kg · {ratio} kg/cv', { power: s.power, torque: s.torque, mass: s.mass, ratio: s.ratio.toFixed(1) })}</p>
         <p class="note">${it.owned ? t('Já está na sua garagem. Enter coloca na pista.') : t('Comprar por ¥ {price}.', { price: formatPoints(it.price) })}</p>`;
@@ -915,7 +915,8 @@ export class Menu {
   }
 
   drawSpecs(car) {
-    const s = carSpecs({ ...car, params: upgradedParams(car, loadProfile().upgrades?.[car.id]) });
+    // Ficha do carro escolhido: com a preparação comprada e o peso dos kits montados nele.
+    const s = carSpecs({ ...car, params: upgradedParams(car, loadProfile().upgrades?.[car.id], loadGarage(car.id, this.unlocked)) });
     const bar = (value, max) => {
       const on = Math.round(Math.max(0, Math.min(1, value / max)) * 16);
       return `<span class="spec-bar">${'<i class="on"></i>'.repeat(on)}${'<i></i>'.repeat(16 - on)}</span>`;
@@ -930,10 +931,99 @@ export class Menu {
       <div class="spec"><span>${t('MOTOR')}</span><span class="spec-text">${t(ENGINE_PROFILES[car.engine]?.name ?? '')}</span></div>`;
   }
 
+  // Ficha de dano: o carro visto de cima com as zonas amassadas, as peças que faltam e o preço de cada item.
+  renderDamage() {
+    const p = loadProfile();
+    const damage = ProfileTracker.damageOf(p, this.settings.car);
+    const items = ProfileTracker.repairItems(damage);
+    const box = document.getElementById('damage-box');
+    box.hidden = !items.length;
+    if (!items.length) return;
+    const canvas = document.getElementById('damage-sheet');
+    const ctx = canvas.getContext('2d');
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    // Carro visto de cima, deitado com o bico para a direita (o cartão é mais largo que alto):
+    // 4,8 m de comprimento por 1,9 m de largura. +x do carro (lado esquerdo) fica em cima no desenho.
+    const scale = Math.min((w - 30) / 5, (h - 24) / 2.6);
+    const px = (x, z) => [w / 2 + z * scale, h / 2 - x * scale];
+    const outline = () => {
+      ctx.beginPath();
+      ctx.moveTo(...px(0.62, 2.35));
+      ctx.lineTo(...px(0.86, 1.85));
+      ctx.lineTo(...px(0.88, -1.7));
+      ctx.lineTo(...px(0.66, -2.3));
+      ctx.lineTo(...px(-0.66, -2.3));
+      ctx.lineTo(...px(-0.88, -1.7));
+      ctx.lineTo(...px(-0.86, 1.85));
+      ctx.lineTo(...px(-0.62, 2.35));
+      ctx.closePath();
+    };
+    // Zonas com amassado: mancha vermelha por cima da silhueta, mais forte quanto pior.
+    ctx.save();
+    outline();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(61,255,196,0.07)';
+    ctx.fillRect(0, 0, w, h);
+    for (const it of items) {
+      if (it.kind === 'part') continue;
+      const [cx, cy] = px(it.at[0], it.at[1]);
+      const r = (it.kind === 'dent' ? 1.5 : 1.1) * scale;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      const a = Math.min(0.75, 0.2 + it.value * 0.55);
+      grad.addColorStop(0, `rgba(255,60,40,${a})`);
+      grad.addColorStop(1, 'rgba(255,60,40,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    outline();
+    ctx.strokeStyle = '#3dffc4';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Vidros e rodas, só para dar leitura ao desenho
+    ctx.strokeStyle = 'rgba(61,255,196,0.45)';
+    ctx.lineWidth = 1.5;
+    for (const [z0, z1] of [[1.25, 0.72], [-1.15, -1.62]]) {
+      ctx.beginPath();
+      ctx.moveTo(...px(0.62, z0)); ctx.lineTo(...px(0.7, z1)); ctx.lineTo(...px(-0.7, z1)); ctx.lineTo(...px(-0.62, z0));
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(61,255,196,0.3)';
+    for (const z of [1.35, -1.35]) for (const x of [0.92, -0.92]) {
+      const [cx, cy] = px(x, z);
+      ctx.fillRect(cx - 0.11 * scale, cy - 0.33 * scale, 0.22 * scale, 0.66 * scale);
+    }
+    // Peças que faltam: cruz âmbar no lugar delas
+    ctx.font = `${Math.round(scale * 0.34)}px VT323, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const it of items) {
+      if (it.kind !== 'part') continue;
+      const [cx, cy] = px(it.at[0], it.at[1]);
+      ctx.strokeStyle = '#ffb13b';
+      ctx.lineWidth = 3;
+      const r = scale * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+      ctx.stroke();
+    }
+    const money = p.money;
+    const rows = items.map((it) => `<span>${it.kind === 'part' ? '✕ ' : ''}${t(it.label)}</span><b>¥ ${formatPoints(it.cost)}</b>`).join('');
+    const total = ProfileTracker.repairCost(damage);
+    const broke = total > money ? ' broke' : '';
+    document.getElementById('damage-list').innerHTML = `${rows}<span class="total${broke}">${t('TOTAL DO CONSERTO')}</span><b class="total${broke}">¥ ${formatPoints(total)}</b>`;
+  }
+
   // Dinheiro e estado da lataria na garagem (o conserto é pago aqui).
   renderMoney() {
     const p = loadProfile();
     const cost = ProfileTracker.repairCost(ProfileTracker.damageOf(p, this.settings.car));
+    this.renderDamage();
     const money = document.getElementById('garage-money');
     money.innerHTML = cost > 0
       ? `${t('¥ {money}', { money: formatPoints(p.money) })} · <span class="${cost > p.money ? 'broke' : ''}">${t('lataria: conserto por ¥ {cost}', { cost: formatPoints(cost) })}</span>`

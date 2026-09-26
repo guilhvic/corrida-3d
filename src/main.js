@@ -245,11 +245,14 @@ function setPlayerCar(id, force = false, state = null) {
   const def = carById(id);
   if (def.id === playerCarId && !force) return;
   playerCarId = def.id;
-  setCarParams(car, upgradedParams(def, profile.profile.upgrades?.[def.id])); // acerto com a preparação do BODYSHOP
+  const garage = loadGarage(def.id, garageUnlocks(profile.profile));
+  // Acerto com a preparação do BODYSHOP e com o peso dos kits de carroceria da garagem
+  setCarParams(car, upgradedParams(def, profile.profile.upgrades?.[def.id], garage));
   audio.setEngine(def.engine);
+  audio.setEngineTune(profile.profile.upgrades?.[def.id]?.motor || 0); // turbo maior: mais chiado e mais estouros
   carModel?.dispose();
   ghostModel?.dispose();
-  const look = garageLook(loadGarage(def.id, garageUnlocks(profile.profile)));
+  const look = garageLook(garage);
   carModel = createCarModel({ design: def.design, look, breakable: true });
   driftTrail.setColor(look.trail);
   carModel.setEnvMap(envTarget.texture);
@@ -305,6 +308,7 @@ function addDamage(hit, dt, scrape, c = car, zones = damage) {
 const debris = new DebrisField(scene);
 debris.groundAt = (x, z) => groundAt(track, nearestIndex(track, x, z, idx, 40), x, z);
 let crashCooldown = 0; // s: o contato dura vários quadros; uma batida forte vale uma vez
+let backfire = 0;      // labareda do estouro no escapamento (decai em alguns centésimos)
 const shardMats = {
   glass: new THREE.MeshBasicMaterial({ color: 0xcfe6ff, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
   red: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 0.12, 0.1), transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
@@ -560,6 +564,12 @@ const audio = new CarAudio();
 const announcer = new Announcer();
 // Música começa na primeira interação (o navegador só libera o áudio depois de um gesto)
 const unlockAudio = () => { audio.start(); if (audio.ctx) audio.suspend(race.phase === 'menu' || paused); };
+// Som preso tocando: o AudioWorklet do motor e da música não para junto com a animação. Some a página
+// (outra aba, janela escondida, painel do navegador fechado) e ele cala; ao voltar, volta como estava.
+document.addEventListener('visibilitychange', () => audio.setPageVisible(!document.hidden, race.phase === 'menu' || paused));
+// Fechar, recarregar ou sair da página: fecha o áudio de vez (com bfcache, só suspende para poder voltar).
+addEventListener('pagehide', (e) => (e.persisted ? audio.setPageVisible(false, true) : audio.dispose()));
+addEventListener('beforeunload', () => audio.dispose());
 addEventListener('pointerdown', unlockAudio, { once: true });
 addEventListener('keydown', unlockAudio, { once: true });
 // A troca de música não avisa em tela (só a tecla K, quando é o jogador que liga a trilha).
@@ -1079,7 +1089,10 @@ const menu = new Menu({
     if (item.kind === 'upgrade') profile.setUpgrade(item.car, item.id, item.level + 1);
     if (item.kind === 'part') profile.giveItem(item.key);
     profile.save();
-    if (item.kind === 'upgrade' && item.car === playerCarId) setCarParams(car, upgradedParams(carById(playerCarId), profile.profile.upgrades[playerCarId]));
+    if (item.kind === 'upgrade' && item.car === playerCarId) {
+      setCarParams(car, upgradedParams(carById(playerCarId), profile.profile.upgrades[playerCarId], loadGarage(playerCarId, garageUnlocks(profile.profile))));
+      audio.setEngineTune(profile.profile.upgrades[playerCarId]?.motor || 0);
+    }
     audio.start();
     return true;
   },
@@ -1403,6 +1416,15 @@ function simulate(dt, demoMode = false) {
       input.hit(Math.min(1, 0.25 + strength * 0.08), 200);
     }
   }
+
+  // Estouros no escapamento: tirando o pé em giro alto, o motor preparado cospe fogo pela ponta do escapamento.
+  // O estalo em si é do som do motor (engine-dsp.js); aqui é só a labareda, na mesma condição.
+  const tune = profile.profile.upgrades?.[playerCarId]?.motor || 0;
+  backfire = Math.max(0, backfire - simDt * 14);
+  if (tune > 0 && !demoMode && inp.throttle < 0.05 && car.rpm > 3400 - tune * 300 && car.speed > 5) {
+    if (Math.random() < simDt * (1.5 + tune * 3.5)) backfire = 0.6 + Math.random() * 0.4;
+  }
+  carModel.setBackfire(backfire);
 
   // Fumaça, marcas de pneu e chiado
   const moving = car.speed > 3;

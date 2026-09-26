@@ -1,5 +1,5 @@
 // Gera um .wav do som do motor pilotando o carro na física do jogo, para ouvir fora do navegador.
-// Uso: node tools/render-engine.js [saida.wav] [perfil: i4t | i6t | rotary]
+// Uso: node tools/render-engine.js [saida.wav] [perfil: i4t | i6t | rotary] [estágio do motor: 0 a 3]
 import { writeFileSync } from 'node:fs';
 import { createCar, stepCar } from '../src/physics.js';
 import { SURFACES } from '../src/track.js';
@@ -25,6 +25,7 @@ const total = script[script.length - 1][1];
 
 const car = createCar();
 const dsp = new EngineDSP(SR, 7, { profile: process.argv[3] || 'i4t' });
+dsp.setTune(Number(process.argv[4]) || 0); // preparação do motor (BODYSHOP): turbo maior, mais alívio e estouros
 const samples = new Float32Array(Math.round(total * SR));
 const block = new Float32Array(Math.round(SR * DT));
 const segments = script.map(([a, b, , label]) => ({ a, b, label, peak: 0, sumSq: 0, n: 0, rpmMax: 0 }));

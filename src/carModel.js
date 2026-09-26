@@ -13,6 +13,7 @@ import { CarBody } from './carBody.js';
 import * as M from './carMaterials.js';
 import * as W from './carWheels.js';
 import * as P from './carParts.js';
+import { buildBodyKit } from './carKits.js';
 import { SurfaceProbe } from './carProbe.js';
 
 const R = CAR.wheelRadius;
@@ -164,12 +165,29 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     axles: design.axles, NOSE: shape.zMax, TAIL: shape.zMin,
     aero: (m) => { aeroParts.push(m); return m; }, // aerofólio original (a garagem pode trocar)
     breakables: ghost || !breakable ? null : [], // peças que se soltam numa batida (P.breakable)
+    exhausts: ghost ? null : [], // pontas do escapamento (labareda dos estouros)
   };
   ctx.popup = (spec) => P.popupHeadlight(ctx, spec);
   // Peças próprias do design: devolve { tailMat, tailFlares: [[x,y,z]], beams: [[x,y,z]] }
   const parts = ghost ? { tailMat: null, tailFlares: [], beams: [] } : design.build(ctx);
 
-  // --- Garagem: aerofólio, adesivos e altura ---------------------------------------------------------
+  // Painéis que arrancam numa batida: um pedaço da própria superfície da lataria vira destroço (a chapa de
+  // baixo fica amassada e escura, como se o painel tivesse saído). As regiões ficam aqui em cima porque o
+  // capô de fibra da garagem cobre exatamente a mesma região.
+  const door = design.door ?? { z0: a - 0.6, z1: -b + 0.7 };
+  const doorZ0 = Math.min(door.z0, door.z1) + 0.04, doorZ1 = Math.max(door.z0, door.z1) - 0.04;
+  const PANELS = {
+    'para-choque-diant': { z0: shape.zMax - 0.5, z1: shape.zMax - 0.02, g0: 0.9, g1: 3.4, both: true, mode: 1 },
+    'para-choque-tras': { z0: shape.zMin + 0.02, z1: shape.zMin + 0.5, g0: 0.9, g1: 3.4, both: true, mode: 1 },
+    capo: { z0: 0.75, z1: shape.zMax - 0.35, g0: 4.25, g1: 7, both: true, mode: 2 },
+    'porta-esq': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: 1, mode: 3 },
+    'porta-dir': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: -1, mode: 3 },
+  };
+
+  // --- Garagem: kits de carroceria, aerofólio, adesivos e altura -------------------------------------
+  // Kit de carroceria: splitter, canards, saias, difusor, alargadores e capô de fibra. O que fica preso a um
+  // painel que arranca (para-choque, capô) vem num grupo próprio, que voa junto na batida.
+  const kitExtras = ghost ? {} : buildBodyKit(ctx, look, PANELS);
   if (!ghost && look?.wing && look.wing !== 'original') {
     for (const m of aeroParts) m.removeFromParent();
     const zDeck = shape.zMin + (design.wingDeck ?? 0.34);
@@ -324,11 +342,12 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
       && luma(m.color) < 0.1 && (m.metalness ?? 0) < 0.6 && !(m.emissive && m.emissive.getHex());
     const darkShared = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.2, envMap, envMapIntensity: 0.6 });
     bakeColors(detail, new Set(holders), { filter: dark, shared: darkShared });
-    bakeColors(body, new Set([interior, detail, ...holders, ...beams]), { filter: dark, shared: darkShared });
+    bakeColors(body, new Set([interior, detail, ...holders, ...beams, ...Object.values(kitExtras)]), { filter: dark, shared: darkShared });
   }
+  const kitGroups = Object.values(kitExtras);
   mergeByMaterial(detail, new Set(holders));
-  mergeByMaterial(body, new Set([interior, detail, ...holders, ...beams]));
-  for (const h of holders) mergeByMaterial(h, new Set());
+  mergeByMaterial(body, new Set([interior, detail, ...holders, ...beams, ...kitGroups]));
+  for (const h of [...holders, ...kitGroups]) mergeByMaterial(h, new Set());
 
   // Visto de dentro (câmera de cockpit): a lataria só tem a face de fora, então o teto, as colunas e as portas
   // ganham um forro com o lado de trás da mesma superfície, e os vidros um reflexo fraco por dentro.
@@ -347,6 +366,25 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
       const m = new THREE.Mesh(built.glass, innerGlass);
       m.renderOrder = 1;
       interior.add(m);
+    }
+  }
+
+  // --- Estouros no escapamento -------------------------------------------------------------------------
+  // Labareda curta na ponta do escapamento quando o motor estala ao desacelerar (só com preparação; quem
+  // acende é o jogo, em setBackfire). Sprite aditivo: aparece igual de qualquer ângulo e é barato.
+  const flames = [];
+  if (!ghost && ctx.exhausts?.length) {
+    const flameMat = new THREE.SpriteMaterial({
+      map: glowTexture(), color: new THREE.Color(3, 0.9, 0.25), blending: THREE.AdditiveBlending,
+      transparent: true, depthWrite: false, opacity: 0,
+    });
+    for (const e of ctx.exhausts) {
+      const sprite = new THREE.Sprite(flameMat);
+      sprite.position.set(e.x, e.y, e.z + e.dir * (e.r + 0.05));
+      sprite.scale.set(0.18, 0.12, 1);
+      sprite.visible = false;
+      body.add(sprite);
+      flames.push(sprite);
     }
   }
 
@@ -370,17 +408,6 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
   }
 
   // --- Quebra ------------------------------------------------------------------------------------------
-  // Painéis que arrancam: um pedaço da própria superfície da lataria vira destroço (a chapa de baixo
-  // fica amassada e escura, como se o painel tivesse saído).
-  const door = design.door ?? { z0: a - 0.6, z1: -b + 0.7 };
-  const doorZ0 = Math.min(door.z0, door.z1) + 0.04, doorZ1 = Math.max(door.z0, door.z1) - 0.04;
-  const PANELS = {
-    'para-choque-diant': { z0: shape.zMax - 0.5, z1: shape.zMax - 0.02, g0: 0.9, g1: 3.4, both: true, mode: 1 },
-    'para-choque-tras': { z0: shape.zMin + 0.02, z1: shape.zMin + 0.5, g0: 0.9, g1: 3.4, both: true, mode: 1 },
-    capo: { z0: 0.75, z1: shape.zMax - 0.35, g0: 4.25, g1: 7, both: true, mode: 2 },
-    'porta-esq': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: 1, mode: 3 },
-    'porta-dir': { z0: doorZ0, z1: doorZ1, g0: 1.3, g1: 3.95, side: -1, mode: 3 },
-  };
   const panelMat = paint.clone();
   panelMat.side = THREE.DoubleSide;
   const panelMesh = (name) => {
@@ -522,6 +549,8 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
         if (name === 'porta-esq' && insideParts.doorCards.esq) insideParts.doorCards.esq.visible = false;
         if (name === 'porta-dir' && insideParts.doorCards.dir) insideParts.doorCards.dir.visible = false;
         body.add(mesh);
+        // Splitter, canards, difusor ou capô de fibra montados nesse painel voam presos nele.
+        if (kitExtras[name]) mesh.add(kitExtras[name]);
         return toWorld(mesh);
       }
       const b = (ctx.breakables || []).find((q) => q.name === name && q.holder.parent);
@@ -558,6 +587,7 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
     },
     brokenParts: () => [...broken],
     shardMaterial: panelMat, // lascas de pintura (dupla face, cor do carro)
+    kitExtras, // peças do kit presas a cada painel (para depuração e para o painel levá-las na batida)
     // De longe (rivais): some o que vira poucos pixels — interior, peças miúdas, freios e as peças pequenas
     // ainda presas (retrovisores, placas). As que já voaram são destroços e não entram aqui.
     setDetail(near) {
@@ -585,6 +615,18 @@ export function createCarModel({ design: designId = 'kaze180', color, ghost = fa
         extra.geometry.dispose();
         if (engineBay) engineBay.visible = bay;
       };
+    },
+    // Estouro no escapamento: 0 apaga, 1 é a labareda cheia. Cada chamada sorteia um tamanho.
+    setBackfire(v) {
+      if (!flames.length) return;
+      const on = v > 0.01;
+      if (flames[0].material.opacity === 0 && !on) return;
+      flames[0].material.opacity = Math.min(1, v) * 0.75;
+      for (const f of flames) {
+        f.visible = on;
+        // Língua de fogo curta: mais comprida que alta, crescendo com a força do estouro.
+        if (on) f.scale.set(0.16 + v * 0.16, 0.1 + v * 0.07, 1);
+      }
     },
     setPose(x, z, yaw, y = 0, pitch = 0) {
       root.position.set(x, y + 0.03, z);
