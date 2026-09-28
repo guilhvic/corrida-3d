@@ -277,6 +277,8 @@ export function exhaustTip(ctx, { x, y, z, r = 0.045, len = 0.16, style = 'round
   addMesh(g, inside, mats.soot, { pos: [0, 0, dir * -0.05], rot: [0, dir < 0 ? Math.PI : 0, 0] });
   if (style === 'oval') g.scale.set(1.35, 0.8, 1);
   parent.add(g);
+  // Guarda a ponta: é dela que sai a labareda dos estouros (carModel.setBackfire).
+  if (ctx.exhausts) ctx.exhausts.push({ x, y, z, dir, r });
   // abafador
   const muffler = addMesh(parent, roundedBox(0.3, 0.12, 0.34, 0.05), mats.underbody);
   muffler.position.set(x * 0.7, y + 0.02, z - dir * 0.3);

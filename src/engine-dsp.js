@@ -2,6 +2,8 @@
 // (tipo RB26/2JZ) e rotativo de 2 rotores (tipo 13B).
 // Pulsos de combustão por cilindro -> ressonância do escapamento (guias de onda) -> timbre -> saturação,
 // mais ronco de admissão, assobio do turbo, válvula de alívio e estalos na desaceleração.
+// O estágio da preparação do motor (tune 0..3, BODYSHOP) aumenta a pressão: assobio mais grave e alto,
+// alívio mais forte e mais estouros no escapamento ao tirar o pé.
 // Módulo puro: roda no AudioWorklet do jogo e no Node (tools/render-engine.js).
 
 const TAU = Math.PI * 2;
@@ -98,6 +100,8 @@ export class EngineDSP {
     this.jitter = P.gains.map(() => 1);
     this.pop = 0;
     this.boost = 0; this.bov = 0; this.lastLoad = 0; this.whistlePhase = 0;
+    this.tune = 0;        // estágio da preparação do motor (0 = de fábrica)
+    this.bovPhase = 0;    // flutter da válvula nos estágios altos
 
     this.pipeA = new Waveguide(sr, 0.0034 * pipeScale, 0.5, 0.3);
     this.pipeB = new Waveguide(sr, 0.0081 * pipeScale, 0.36, 0.55);
@@ -115,6 +119,11 @@ export class EngineDSP {
   setTarget(rpm, load) {
     this.targetRpm = clamp(rpm, 0, 12000);
     this.targetLoad = clamp(load, 0, 1);
+  }
+
+  // Estágio da preparação do motor: 0 = original, 3 = turbo grande.
+  setTune(level) {
+    this.tune = clamp(level || 0, 0, 3);
   }
 
   updateFilters() {
@@ -147,8 +156,12 @@ export class EngineDSP {
         // Rotativo em baixa: queima irregular ("brap brap") que some com giro e carga.
         const lope = P.lope * clamp(1 - (rpm - 900) / 2200, 0, 1) * (1 - load);
         if (lope > 0 && rand() < 0.35 * lope) this.jitter[cyl] *= 0.15 + rand() * 0.5;
-        // Estalo no escapamento ao desacelerar em giro alto.
-        if (load < 0.06 && rpm > 2800 && rand() < P.pops) this.pop = 0.5 + rand() * 0.5;
+        // Estalo no escapamento ao desacelerar em giro alto. Com a preparação, vem mais e mais forte
+        // (mistura rica sobrando no coletor), e já a partir de um giro mais baixo.
+        const tune = this.tune;
+        if (load < 0.06 + tune * 0.02 && rpm > 2800 - tune * 300 && rand() < P.pops * (1 + tune * 1.3)) {
+          this.pop = (0.5 + rand() * 0.5) * (1 + tune * 0.45);
+        }
       }
 
       // Pulso de combustão: estreito em marcha lenta (batida), largo em giro alto (tom contínuo).
@@ -182,19 +195,25 @@ export class EngineDSP {
       // Admissão: sopro de ar sob carga.
       engine += this.intake.process(noise) * load * rpmNorm * P.intake;
 
-      // Turbo: enche com carga e giro, esvazia rápido.
-      const boostTarget = P.turbo && load > 0.45 && rpm > 2800 ? clamp((rpm - 2800) / 3200, 0, 1) * load : 0;
-      this.boost += (boostTarget - this.boost) * ((boostTarget > this.boost ? 1.6 : 5) / sr);
-      this.whistlePhase += (1600 + this.boost * 3800) / sr;
+      // Turbo: enche com carga e giro, esvazia rápido. Turbo maior (tune) sopra mais e demora um pouco mais
+      // para encher, e o assobio fica mais grave e mais presente.
+      const tune = this.tune;
+      const spool = 2800 - tune * 180;
+      const boostTarget = P.turbo && load > 0.45 && rpm > spool ? clamp((rpm - spool) / 3200, 0, 1) * load * (1 + tune * 0.3) : 0;
+      this.boost += (boostTarget - this.boost) * ((boostTarget > this.boost ? 1.6 / (1 + tune * 0.25) : 5) / sr);
+      this.whistlePhase += (1600 - tune * 210 + this.boost * (3800 - tune * 400)) / sr;
       if (this.whistlePhase > 1) this.whistlePhase -= 1;
-      engine += Math.sin(TAU * this.whistlePhase) * this.boost * 0.009 * P.turbo;
+      engine += Math.sin(TAU * this.whistlePhase) * this.boost * 0.009 * (1 + tune * 0.8) * P.turbo;
 
-      // Válvula de alívio: tirar o pé com o turbo cheio.
-      if (this.lastLoad > 0.4 && load < 0.2 && this.boost > 0.35 && this.bov < 0.05) this.bov = this.boost;
+      // Válvula de alívio: tirar o pé com o turbo cheio. Nos estágios altos ela solta mais ar, demora mais a
+      // fechar e ainda dá o "flutter" batendo contra a borboleta fechada.
+      if (this.lastLoad > 0.4 && load < 0.2 && this.boost > 0.35 && this.bov < 0.05) { this.bov = this.boost; this.bovPhase = 0; }
       this.lastLoad = load;
       if (this.bov > 0.001) {
-        engine += this.bovFilter.process(noise) * this.bov * 0.35;
-        this.bov *= Math.exp(-1 / (0.16 * sr));
+        this.bovPhase += (14 + tune * 4) / sr;
+        const flutter = tune >= 2 ? 0.55 + 0.45 * Math.sin(TAU * this.bovPhase) : 1;
+        engine += this.bovFilter.process(noise) * this.bov * 0.35 * (1 + tune * 0.7) * flutter;
+        this.bov *= Math.exp(-1 / ((0.16 + tune * 0.05) * sr));
       }
 
       out[n] = engine * P.level;

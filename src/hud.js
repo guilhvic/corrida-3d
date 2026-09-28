@@ -68,9 +68,11 @@ export class Hud {
     const ctx = (this.map = canvas.getContext('2d'));
     ctx.scale(dpr, dpr);
 
-    const { N, x, z } = this.track;
+    const { N, x, z, lot } = this.track;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let j = 0; j < N; j++) {
+    // Estacionamento: o mapa é o contorno do pátio (o traçado de dentro é só para o jogo).
+    if (lot) ({ minX, maxX, minZ, maxZ } = lot.rect);
+    else for (let j = 0; j < N; j++) {
       minX = Math.min(minX, x[j]); maxX = Math.max(maxX, x[j]);
       minZ = Math.min(minZ, z[j]); maxZ = Math.max(maxZ, z[j]);
     }
@@ -81,7 +83,10 @@ export class Hud {
     this.project = (px, pz) => [ox + (maxX - px) * s, oz + (maxZ - pz) * s];
 
     const path = new Path2D();
-    for (let j = 0; j <= N; j++) {
+    if (lot) {
+      const [ax, ay] = this.project(maxX, maxZ), [bx, by] = this.project(minX, minZ);
+      path.rect(ax, ay, bx - ax, by - ay);
+    } else for (let j = 0; j <= N; j++) {
       const [sx, sy] = this.project(x[j % N], z[j % N]);
       if (j === 0) path.moveTo(sx, sy); else path.lineTo(sx, sy);
     }
@@ -89,7 +94,7 @@ export class Hud {
     this.mapSize = size;
   }
 
-  drawMinimap(car, ghost, rivals = []) {
+  drawMinimap(car, ghost, rivals = [], cones = null) {
     const ctx = this.map, size = this.mapSize;
     ctx.clearRect(0, 0, size, size);
     ctx.lineJoin = 'round';
@@ -100,9 +105,17 @@ export class Hud {
     ctx.stroke(this.mapPath);
     ctx.shadowBlur = 0;
 
-    const [lx, ly] = this.project(this.track.x[0], this.track.z[0]);
-    ctx.fillStyle = '#ffb13b';
-    ctx.fillRect(lx - 5, ly - 1, 10, 2);
+    if (!this.track.lot) {
+      const [lx, ly] = this.project(this.track.x[0], this.track.z[0]);
+      ctx.fillStyle = '#ffb13b';
+      ctx.fillRect(lx - 5, ly - 1, 10, 2);
+    }
+    // Cones de pé (os derrubados ficam apagados)
+    if (cones) for (const k of cones.cones) {
+      const [sx, sy] = this.project(k.x, k.z);
+      ctx.fillStyle = k.down ? 'rgba(255,122,42,0.3)' : '#ff7a2a';
+      ctx.fillRect(sx - 1, sy - 1, 2, 2);
+    }
 
     const dot = (px, pz, color, r) => {
       const [sx, sy] = this.project(px, pz);
@@ -117,11 +130,18 @@ export class Hud {
     dot(car.x, car.z, '#ffb13b', 3.5);
   }
 
-  update(car, timer, scorer, { fps, ghost, padName, totalLaps = 0, rivals = [] }) {
+  update(car, timer, scorer, { fps, ghost, padName, totalLaps = 0, rivals = [], cones = null }) {
     const e = this.el;
-    const lapText = totalLaps ? t('VOLTA {lap}/{laps}', { lap: Math.min(timer.lap, totalLaps), laps: totalLaps }) : t('VOLTA {lap}', { lap: String(timer.lap).padStart(2, '0') });
-    setText(e.lap, timer.lap === 0 ? t('SAÍDA') : lapText);
-    setText(e.lapTime, timer.lap === 0 ? '-:--.--' : formatTime(timer.time).slice(0, -1));
+    setText(this.pointsCaption ??= $('hud-points-caption'), t(this.track.lot ? 'PONTOS NO TREINO' : 'PONTOS NA VOLTA'));
+    if (this.track.lot) {
+      // Treino: sem volta nem cronômetro; no lugar, os cones derrubados.
+      setText(e.lap, t('TREINO'));
+      setText(e.lapTime, t('CONES {n}', { n: cones?.knocked ?? 0 }));
+    } else {
+      const lapText = totalLaps ? t('VOLTA {lap}/{laps}', { lap: Math.min(timer.lap, totalLaps), laps: totalLaps }) : t('VOLTA {lap}', { lap: String(timer.lap).padStart(2, '0') });
+      setText(e.lap, timer.lap === 0 ? t('SAÍDA') : lapText);
+      setText(e.lapTime, timer.lap === 0 ? '-:--.--' : formatTime(timer.time).slice(0, -1));
+    }
     this.lapPoints.set(Math.round(scorer.lapPoints));
 
     // Combo
@@ -146,7 +166,7 @@ export class Hud {
     setText(e.fps, `${Math.round(fps)} FPS`);
     e.pad.hidden = !padName;
     if (padName) setText(e.pad, t(padName).toUpperCase());
-    this.drawMinimap(car, ghost, rivals);
+    this.drawMinimap(car, ghost, rivals, this.track.lot ? cones : null);
   }
 
   // rows: classificação ordenada [{ name, color, points, player }]; vazio esconde o painel.

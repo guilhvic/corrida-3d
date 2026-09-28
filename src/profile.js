@@ -65,6 +65,35 @@ export function saveProfile(profile, storage = globalThis.localStorage) {
   try { storage.setItem(STORAGE_KEY, JSON.stringify(profile)); } catch { /* sem storage */ }
 }
 
+// Zonas de amassado e lados riscados, com o ponto de cada uma no desenho do carro ([x lateral, z frente]).
+const DENT_ZONES = [
+  ['front', 'Amassado na frente', [0, 1.7]],
+  ['rear', 'Amassado atrás', [0, -1.8]],
+  ['left', 'Amassado do lado esquerdo', [0.85, 0.1]],
+  ['right', 'Amassado do lado direito', [-0.85, 0.1]],
+];
+const SCRATCH_SIDES = [
+  ['scratchL', 'Riscos na lateral esquerda', [0.85, -0.9]],
+  ['scratchR', 'Riscos na lateral direita', [-0.85, -0.9]],
+];
+
+// Peças que caem numa batida: nome na ficha e onde ficam no desenho.
+const PARTS = {
+  'para-choque-diant': ['Para-choque dianteiro', [0, 2.25]],
+  'para-choque-tras': ['Para-choque traseiro', [0, -2.25]],
+  capo: ['Capô', [0, 1.25]],
+  'porta-esq': ['Porta esquerda', [0.9, 0.05]],
+  'porta-dir': ['Porta direita', [-0.9, 0.05]],
+  'farol-esq': ['Farol esquerdo', [0.6, 2.1]],
+  'farol-dir': ['Farol direito', [-0.6, 2.1]],
+  'retrovisor-esq': ['Retrovisor esquerdo', [1.05, 0.85]],
+  'retrovisor-dir': ['Retrovisor direito', [-1.05, 0.85]],
+  'placa-frente': ['Placa da frente', [0, 2.35]],
+  'placa-tras': ['Placa de trás', [0, -2.35]],
+  aerofolio: ['Aerofólio', [0, -2]],
+  lanternas: ['Lanternas traseiras', [0.5, -2.2]],
+};
+
 export class ProfileTracker {
   constructor(storage = globalThis.localStorage) {
     this.storage = storage;
@@ -185,10 +214,27 @@ export class ProfileTracker {
   // Conserto da lataria: amassado custa mais que risco, peça arrancada custa por peça; na centena.
   static repairCost(damage) {
     if (!damage) return 0;
-    const dents = (damage.front + damage.rear + damage.left + damage.right) * 1200;
-    const scratches = (damage.scratchL + damage.scratchR) * 500;
-    const parts = (damage.broken?.length || 0) * 450;
-    return Math.round((dents + scratches + parts) / 100) * 100;
+    const total = ProfileTracker.repairItems(damage).reduce((sum, it) => sum + it.cost, 0);
+    return Math.round(total / 100) * 100;
+  }
+
+  // Conserto item a item, para a ficha de dano da garagem: uma linha por zona amassada, por lado riscado e
+  // por peça que caiu, já com o lugar de cada uma no desenho do carro visto de cima (x lateral, z da frente).
+  static repairItems(damage) {
+    if (!damage) return [];
+    const out = [];
+    for (const [key, label, at] of DENT_ZONES) {
+      const value = damage[key] || 0;
+      if (value > 0.04) out.push({ kind: 'dent', key, label, value, cost: Math.round(value * 1200), at });
+    }
+    for (const [key, label, at] of SCRATCH_SIDES) {
+      const value = damage[key] || 0;
+      if (value > 0.04) out.push({ kind: 'scratch', key, label, value, cost: Math.round(value * 500), at });
+    }
+    for (const name of damage.broken || []) {
+      out.push({ kind: 'part', key: name, label: PARTS[name]?.[0] ?? name, cost: 450, at: PARTS[name]?.[1] ?? [0, 0] });
+    }
+    return out;
   }
 
   earn(amount) {

@@ -1,7 +1,7 @@
 // Menus: tela inicial (modos), singleplayer (pista, carro, voltas, grid, dificuldade), garagem, ranking, perfil do piloto,
 // configurações, controles, pausa e resultado.
 // Navega com mouse, teclado (setas/WASD, Enter, Esc) ou controle (D-pad/analógico, A, B).
-import { TRACKS, CARS, LAP_OPTIONS, carSpecs, trackById, timeOf } from './catalog.js';
+import { TRACKS, CARS, LAP_OPTIONS, PRACTICE, carSpecs, trackById, timeOf } from './catalog.js';
 import { MAX_RACERS } from './race.js';
 import { DIFFICULTIES, DIFFICULTY_ORDER } from './difficulty.js';
 import { ENGINE_PROFILES } from './engine-dsp.js';
@@ -61,6 +61,9 @@ export class Menu {
       laps: LAP_OPTIONS.includes(saved.laps) ? saved.laps : 3,
       racers: Number.isInteger(saved.racers) && saved.racers >= 1 && saved.racers <= MAX_RACERS ? saved.racers : 4,
       ghost: typeof saved.ghost === 'string' ? saved.ghost : 'best', // 'best', 'none' ou id de uma volta do ranking
+      // Modo do singleplayer: corrida numa pista ou treino no estacionamento (com o horário próprio dele)
+      mode: saved.mode === 'practice' ? 'practice' : 'race',
+      practiceTime: timeOf(PRACTICE, saved.practiceTime).id,
     };
 
     // Horário aleatório vale com qualquer pista; pista aleatória sempre sorteia o horário também
@@ -71,6 +74,12 @@ export class Menu {
 
     // Cada seletor: lista de opções, índice atual e como mostrar. Pista e horário têm ALEATÓRIA/ALEATÓRIO no fim.
     this.selectors = {
+      mode: {
+        count: () => 2,
+        index: () => (this.practice ? 1 : 0),
+        set: (i) => { this.settings.mode = i === 1 ? 'practice' : 'race'; },
+        label: (i) => (i === 1 ? [t('ESTACIONAMENTO'), t('treino com cones, sem cronômetro nem rivais')] : [t('CORRIDA'), t('pista, voltas e rivais de IA')]),
+      },
       track: {
         count: () => TRACKS.length + 1,
         index: () => (this.settings.track === RANDOM ? TRACKS.length : TRACKS.findIndex((t) => t.id === this.settings.track)),
@@ -82,17 +91,21 @@ export class Menu {
         },
         label: (i) => (i === TRACKS.length ? [t('ALEATÓRIA'), t('sorteada entre as {n} a cada largada', { n: TRACKS.length })] : [t(TRACKS[i].name), TRACKS[i].jp]),
       },
+      // No treino o horário é o do estacionamento (sem sorteio)
       time: {
-        count: () => (this.settings.track === RANDOM ? 1 : trackById(this.settings.track).times.length + 1),
+        count: () => (this.practice ? PRACTICE.times.length : this.settings.track === RANDOM ? 1 : trackById(this.settings.track).times.length + 1),
         index: () => {
+          if (this.practice) return Math.max(0, PRACTICE.times.findIndex((tm) => tm.id === this.settings.practiceTime));
           if (this.settings.time === RANDOM) return this.selectors.time.count() - 1;
           return trackById(this.settings.track).times.findIndex((t) => t.id === this.settings.time);
         },
         set: (i) => {
+          if (this.practice) { this.settings.practiceTime = PRACTICE.times[i].id; return; }
           const times = trackById(this.settings.track).times;
           this.settings.time = this.settings.track === RANDOM || i === times.length ? RANDOM : times[i].id;
         },
         label: (i) => {
+          if (this.practice) return [t(PRACTICE.times[i].name), PRACTICE.times[i].jp];
           if (this.settings.track === RANDOM || i === trackById(this.settings.track).times.length) return [t('ALEATÓRIO'), t('sorteado a cada largada')];
           const time = trackById(this.settings.track).times[i];
           return [t(time.name), time.jp];
@@ -248,6 +261,8 @@ export class Menu {
 
   get visible() { return this.current !== null; }
 
+  get practice() { return this.settings.mode === 'practice'; }
+
   // Conquistas liberadas (lidas do perfil salvo)
   get unlocked() { return garageUnlocks(loadProfile()); }
 
@@ -310,7 +325,7 @@ export class Menu {
     const car = CARS.find((c) => c.id === it.car) ?? CARS[0];
     let html = `<h3>${it.name}</h3>`;
     if (it.kind === 'car') {
-      const s = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id]) });
+      const s = carSpecs({ ...car, params: upgradedParams(car, p.upgrades?.[car.id], loadGarage(car.id, this.unlocked)) });
       html += `<p class="note spec-desc">${t(car.description)}</p>
         <p class="note">${t('{power} cv · {torque} N·m · {mass} kg · {ratio} kg/cv', { power: s.power, torque: s.torque, mass: s.mass, ratio: s.ratio.toFixed(1) })}</p>
         <p class="note">${it.owned ? t('Já está na sua garagem. Enter coloca na pista.') : t('Comprar por ¥ {price}.', { price: formatPoints(it.price) })}</p>`;
@@ -374,6 +389,8 @@ export class Menu {
   // Configuração da corrida com pista e horário aleatórios já sorteados
   resolved() {
     const s = { ...this.settings };
+    // Treino: o lugar é sempre o estacionamento, sozinho e sem chegada.
+    if (this.practice) return { ...s, track: PRACTICE.id, time: s.practiceTime, laps: 0, racers: 1 };
     if (s.track === RANDOM) s.track = TRACKS[Math.floor(Math.random() * TRACKS.length)].id;
     const times = trackById(s.track).times;
     if (s.time === RANDOM) s.time = times[Math.floor(Math.random() * times.length)].id;
@@ -758,6 +775,9 @@ export class Menu {
       el.classList.toggle('single', s.count() < 2);
     }
     document.getElementById('difficulty-text').textContent = t(DIFFICULTIES[this.difficulty].description);
+    for (const key of ['track', 'laps', 'racers']) this.root.querySelector(`.selector[data-key="${key}"]`).hidden = this.practice;
+    document.getElementById('start-btn').textContent = t(this.practice ? 'INICIAR TREINO' : 'INICIAR CORRIDA');
+    document.getElementById('track-caption').textContent = t(this.practice ? 'LOCAL' : 'PISTA');
 
     const randomTrack = this.settings.track === RANDOM, randomTime = this.settings.time === RANDOM;
     const track = randomTrack ? null : trackById(this.settings.track);
@@ -766,6 +786,7 @@ export class Menu {
     this.renderMoney();
     this.renderRanking(car);
     if (this.current === 'profile') this.renderProfile();
+    if (this.practice) { this.renderPractice(car); return; }
     document.getElementById('track-info').textContent = randomTrack
       ? t('Pista e horário sorteados a cada largada entre: {list}.', { list: TRACKS.map((tr) => t(tr.name).toLowerCase()).join(', ') })
       : `${Math.round(this.previewTrack.length)} m · ${t(track.description)} ${randomTime ? t('Horário sorteado a cada largada ({list}).', { list: track.times.map((tm) => t(tm.name).toLowerCase()).join(', ') }) : t(timeOf(track, this.settings.time).description)}`;
@@ -777,6 +798,44 @@ export class Menu {
       ? t('Treino livre: sem chegada, voltas contam para o recorde de volta.')
       : randomTrack ? t('Pista aleatória: o recorde fica salvo na pista sorteada.')
         : record ? t('Recorde ({laps}): {points} pts', { laps: lapLabel(this.settings.laps).toLowerCase(), points: formatPoints(record.points) }) : t('Sem recorde nesta configuração ainda.');
+  }
+
+  // Singleplayer no modo treino: o estacionamento visto de cima, com os cones das estações.
+  renderPractice(car) {
+    const lot = this.trackShape(PRACTICE.id).lot;
+    const time = timeOf(PRACTICE, this.settings.practiceTime);
+    document.getElementById('track-info').textContent = `${t(PRACTICE.name)} · ${t(PRACTICE.description)} ${t(time.description)}`;
+    document.getElementById('record-line').textContent = t('Treino: R volta para a saída, arruma os cones e conserta o carro. Nada aqui gasta a lataria de verdade.');
+    document.getElementById('ghost-line').textContent = '';
+    this.drawSpecs(car);
+    const canvas = document.getElementById('track-preview');
+    const ctx = canvas.getContext('2d');
+    const { width: w, height: h } = canvas;
+    const { rect, cones, spawn } = lot;
+    const pad = 16;
+    const s = Math.min((w - pad * 2) / (rect.maxX - rect.minX), (h - pad * 2) / (rect.maxZ - rect.minZ));
+    const ox = (w - (rect.maxX - rect.minX) * s) / 2, oz = (h - (rect.maxZ - rect.minZ) * s) / 2;
+    const project = (px, pz) => [ox + (rect.maxX - px) * s, oz + (rect.maxZ - pz) * s]; // igual ao minimapa
+    ctx.clearRect(0, 0, w, h);
+    const [x0, y0] = project(rect.maxX, rect.maxZ), [x1, y1] = project(rect.minX, rect.minZ);
+    ctx.fillStyle = 'rgba(61,255,196,0.06)';
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.strokeStyle = '#3dffc4';
+    ctx.shadowColor = '#3dffc4';
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ff7a2a';
+    for (const c of cones) {
+      const [cx, cy] = project(c.x, c.z);
+      ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    }
+    const [sx, sy] = project(spawn.x, spawn.z);
+    ctx.fillStyle = '#ffb13b';
+    ctx.fillRect(sx - 4, sy - 7, 8, 14);
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText(t('SAÍDA'), sx + 9, sy + 5);
   }
 
   drawTrack() {
@@ -856,7 +915,8 @@ export class Menu {
   }
 
   drawSpecs(car) {
-    const s = carSpecs({ ...car, params: upgradedParams(car, loadProfile().upgrades?.[car.id]) });
+    // Ficha do carro escolhido: com a preparação comprada e o peso dos kits montados nele.
+    const s = carSpecs({ ...car, params: upgradedParams(car, loadProfile().upgrades?.[car.id], loadGarage(car.id, this.unlocked)) });
     const bar = (value, max) => {
       const on = Math.round(Math.max(0, Math.min(1, value / max)) * 16);
       return `<span class="spec-bar">${'<i class="on"></i>'.repeat(on)}${'<i></i>'.repeat(16 - on)}</span>`;
@@ -871,10 +931,99 @@ export class Menu {
       <div class="spec"><span>${t('MOTOR')}</span><span class="spec-text">${t(ENGINE_PROFILES[car.engine]?.name ?? '')}</span></div>`;
   }
 
+  // Ficha de dano: o carro visto de cima com as zonas amassadas, as peças que faltam e o preço de cada item.
+  renderDamage() {
+    const p = loadProfile();
+    const damage = ProfileTracker.damageOf(p, this.settings.car);
+    const items = ProfileTracker.repairItems(damage);
+    const box = document.getElementById('damage-box');
+    box.hidden = !items.length;
+    if (!items.length) return;
+    const canvas = document.getElementById('damage-sheet');
+    const ctx = canvas.getContext('2d');
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    // Carro visto de cima, deitado com o bico para a direita (o cartão é mais largo que alto):
+    // 4,8 m de comprimento por 1,9 m de largura. +x do carro (lado esquerdo) fica em cima no desenho.
+    const scale = Math.min((w - 30) / 5, (h - 24) / 2.6);
+    const px = (x, z) => [w / 2 + z * scale, h / 2 - x * scale];
+    const outline = () => {
+      ctx.beginPath();
+      ctx.moveTo(...px(0.62, 2.35));
+      ctx.lineTo(...px(0.86, 1.85));
+      ctx.lineTo(...px(0.88, -1.7));
+      ctx.lineTo(...px(0.66, -2.3));
+      ctx.lineTo(...px(-0.66, -2.3));
+      ctx.lineTo(...px(-0.88, -1.7));
+      ctx.lineTo(...px(-0.86, 1.85));
+      ctx.lineTo(...px(-0.62, 2.35));
+      ctx.closePath();
+    };
+    // Zonas com amassado: mancha vermelha por cima da silhueta, mais forte quanto pior.
+    ctx.save();
+    outline();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(61,255,196,0.07)';
+    ctx.fillRect(0, 0, w, h);
+    for (const it of items) {
+      if (it.kind === 'part') continue;
+      const [cx, cy] = px(it.at[0], it.at[1]);
+      const r = (it.kind === 'dent' ? 1.5 : 1.1) * scale;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      const a = Math.min(0.75, 0.2 + it.value * 0.55);
+      grad.addColorStop(0, `rgba(255,60,40,${a})`);
+      grad.addColorStop(1, 'rgba(255,60,40,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    outline();
+    ctx.strokeStyle = '#3dffc4';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Vidros e rodas, só para dar leitura ao desenho
+    ctx.strokeStyle = 'rgba(61,255,196,0.45)';
+    ctx.lineWidth = 1.5;
+    for (const [z0, z1] of [[1.25, 0.72], [-1.15, -1.62]]) {
+      ctx.beginPath();
+      ctx.moveTo(...px(0.62, z0)); ctx.lineTo(...px(0.7, z1)); ctx.lineTo(...px(-0.7, z1)); ctx.lineTo(...px(-0.62, z0));
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(61,255,196,0.3)';
+    for (const z of [1.35, -1.35]) for (const x of [0.92, -0.92]) {
+      const [cx, cy] = px(x, z);
+      ctx.fillRect(cx - 0.11 * scale, cy - 0.33 * scale, 0.22 * scale, 0.66 * scale);
+    }
+    // Peças que faltam: cruz âmbar no lugar delas
+    ctx.font = `${Math.round(scale * 0.34)}px VT323, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const it of items) {
+      if (it.kind !== 'part') continue;
+      const [cx, cy] = px(it.at[0], it.at[1]);
+      ctx.strokeStyle = '#ffb13b';
+      ctx.lineWidth = 3;
+      const r = scale * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+      ctx.stroke();
+    }
+    const money = p.money;
+    const rows = items.map((it) => `<span>${it.kind === 'part' ? '✕ ' : ''}${t(it.label)}</span><b>¥ ${formatPoints(it.cost)}</b>`).join('');
+    const total = ProfileTracker.repairCost(damage);
+    const broke = total > money ? ' broke' : '';
+    document.getElementById('damage-list').innerHTML = `${rows}<span class="total${broke}">${t('TOTAL DO CONSERTO')}</span><b class="total${broke}">¥ ${formatPoints(total)}</b>`;
+  }
+
   // Dinheiro e estado da lataria na garagem (o conserto é pago aqui).
   renderMoney() {
     const p = loadProfile();
     const cost = ProfileTracker.repairCost(ProfileTracker.damageOf(p, this.settings.car));
+    this.renderDamage();
     const money = document.getElementById('garage-money');
     money.innerHTML = cost > 0
       ? `${t('¥ {money}', { money: formatPoints(p.money) })} · <span class="${cost > p.money ? 'broke' : ''}">${t('lataria: conserto por ¥ {cost}', { cost: formatPoints(cost) })}</span>`
@@ -886,7 +1035,12 @@ export class Menu {
   }
 
   // --- Pausa e resultado --------------------------------------------------------------------------
-  showPause({ lap, laps, total, time, position, racers }) {
+  showPause({ lap, laps, total, time, position, racers, practice = null }) {
+    if (practice) {
+      document.getElementById('pause-info').textContent = `${t('treino no estacionamento')} · ${formatPoints(total)} pts · ${t(practice.cones === 1 ? '{n} cone derrubado' : '{n} cones derrubados', { n: practice.cones })}`;
+      this.show('pause');
+      return;
+    }
     const lapText = lap === 0 ? t('volta de saída') : laps ? t('volta {lap} de {laps}', { lap: Math.min(lap, laps), laps }) : t('volta {lap} (treino livre)', { lap });
     const posText = racers > 1 ? ` · ${t('{pos}º de {n}', { pos: position, n: racers })}` : '';
     document.getElementById('pause-info').textContent = `${lapText}${posText} · ${formatPoints(total)} pts · ${formatTime(time).slice(0, -1)}`;
